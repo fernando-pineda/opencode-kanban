@@ -1,8 +1,9 @@
 'use client'
 
-import React from 'react'
+import React, { useState } from 'react'
 import { BoardFull } from '../types'
 import KanbanColumn from './kanban-column'
+import ProjectSummarySheet from './project-summary-sheet'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Brain, PlusCircle, FileText } from 'lucide-react'
 
@@ -13,6 +14,8 @@ interface KanbanBoardProps {
 }
 
 export default function KanbanBoard({ board, onCardClick, onNewSession }: KanbanBoardProps) {
+  const [summaryOpen, setSummaryOpen] = useState(false)
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Board Header — fixed, full width */}
@@ -26,7 +29,7 @@ export default function KanbanBoard({ board, onCardClick, onNewSession }: Kanban
             {[
               { icon: Brain, label: 'Memories', onClick: () => {} },
               { icon: PlusCircle, label: 'New Session', onClick: onNewSession || (() => {}) },
-              { icon: FileText, label: 'Project Summary', onClick: () => {} },
+              { icon: FileText, label: 'Project Summary', onClick: () => setSummaryOpen(true) },
             ].map(({ icon: Icon, label, onClick }) => (
               <Tooltip key={label}>
                 <TooltipTrigger asChild>
@@ -62,6 +65,12 @@ export default function KanbanBoard({ board, onCardClick, onNewSession }: Kanban
           })}
         </div>
       </div>
+
+      <ProjectSummarySheet
+        directory={board.board.repo_path}
+        open={summaryOpen}
+        onOpenChange={setSummaryOpen}
+      />
     </div>
   )
 }

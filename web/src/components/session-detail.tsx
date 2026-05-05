@@ -31,6 +31,7 @@ import {
   Square,
   HelpCircle,
   Trash2,
+  AlertCircle,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -212,14 +213,34 @@ function getAgentForSession(sessionId: string | null): string | null {
 
 /* ── Markdown prose components ──────────────────────────── */
 
-const ProsePre = ({ children, ...props }: ComponentPropsWithoutRef<"pre">) => (
-  <pre
-    {...props}
-    className="bg-muted text-muted-foreground rounded-md p-3 text-xs overflow-x-auto my-2 leading-relaxed"
-  >
-    {children}
-  </pre>
-);
+const ProsePre = ({ children, ...props }: ComponentPropsWithoutRef<"pre">) => {
+  // Check if this is a JSON code block containing a status message
+  let codeContent: string | null = null;
+  let isJsonBlock = false;
+
+  // ReactMarkdown renders code blocks as: <pre><code className="language-json">...</code></pre>
+  if (children && typeof children === "object" && "props" in (children as any)) {
+    const child = children as any;
+    isJsonBlock = child.props?.className?.includes("language-json") || false;
+    codeContent = typeof child.props?.children === "string" ? child.props.children : null;
+  }
+
+  if (isJsonBlock && codeContent) {
+    const statusData = tryParseStatusJson(codeContent);
+    if (statusData) {
+      return <StatusCard data={statusData} />;
+    }
+  }
+
+  return (
+    <pre
+      {...props}
+      className="bg-muted text-muted-foreground rounded-md p-3 text-xs overflow-x-auto my-2 leading-relaxed"
+    >
+      {children}
+    </pre>
+  );
+};
 
 const ProseCode = ({
   children,
@@ -312,6 +333,117 @@ function MarkdownContent({
     </div>
   );
 }
+
+/* ── Status JSON parsing ────────────────────────────────── */
+
+interface StatusMessage {
+  status: "SUCCESS" | "FAILURE" | "PARTIAL";
+  files_modified?: string[];
+  summary?: string;
+  validation_result?: "VALIDATION_PASSED" | "VALIDATION_FAILED" | "NOT_RUN" | string;
+  errors?: string | null | Array<{ message: string }> | Record<string, string>;
+  [key: string]: unknown;
+}
+
+function tryParseStatusJson(text: string): StatusMessage | null {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      "status" in parsed &&
+      ("files_modified" in parsed || "summary" in parsed)
+    ) {
+      return parsed as StatusMessage;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+const StatusCard = memo(function StatusCard({ data }: { data: StatusMessage }) {
+  const statusConfig = {
+    SUCCESS: {
+      bg: "bg-green-500/10",
+      border: "border-green-500/30",
+      icon: <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />,
+      badge: "bg-green-500/20 text-green-600 dark:text-green-400",
+      label: "Success",
+    },
+    FAILURE: {
+      bg: "bg-red-500/10",
+      border: "border-red-500/30",
+      icon: <X className="w-4 h-4 text-red-500 shrink-0" />,
+      badge: "bg-red-500/20 text-red-600 dark:text-red-400",
+      label: "Failed",
+    },
+    PARTIAL: {
+      bg: "bg-amber-500/10",
+      border: "border-amber-500/30",
+      icon: <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />,
+      badge: "bg-amber-500/20 text-amber-600 dark:text-amber-400",
+      label: "Partial",
+    },
+  };
+
+  const config = statusConfig[data.status] || statusConfig.PARTIAL;
+  const hasValidation = !!data.validation_result && data.validation_result !== "NOT_RUN";
+
+  return (
+    <div className={cn("rounded-lg border overflow-hidden my-2", config.border, config.bg)}>
+      {/* Status header */}
+      <div className={cn("flex items-center gap-2 px-3 py-2", config.bg)}>
+        {config.icon}
+        <span className="text-xs font-semibold">{config.label}</span>
+        {hasValidation && (
+          <span className={cn("ml-auto text-[10px] px-1.5 py-0.5 rounded-full font-medium", config.badge)}>
+            {data.validation_result === "VALIDATION_PASSED" ? "✓ Validation Passed" : data.validation_result}
+          </span>
+        )}
+      </div>
+
+      {/* Summary */}
+      {data.summary && (
+        <div className="px-3 py-2 border-t border-muted/50">
+          <p className="text-xs text-foreground leading-relaxed">{data.summary}</p>
+        </div>
+      )}
+
+      {/* Files modified */}
+      {data.files_modified && data.files_modified.length > 0 && (
+        <div className="px-3 py-2 border-t border-muted/50">
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <FileText className="w-3 h-3 text-muted-foreground shrink-0" />
+            <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+              Files ({data.files_modified.length})
+            </span>
+          </div>
+          <div className="space-y-0.5">
+            {data.files_modified.map((file, i) => (
+              <div key={i} className="flex items-center gap-1.5 text-xs">
+                <span className="text-muted-foreground shrink-0">•</span>
+                <code className="font-mono text-muted-foreground truncate">{file}</code>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Errors */}
+      {data.errors && (
+        <div className="px-3 py-2 border-t border-red-500/20 bg-red-500/5">
+          <span className="text-[10px] font-medium text-red-500 uppercase tracking-wide">Errors</span>
+          <p className="text-xs text-red-600 dark:text-red-400 mt-0.5">
+            {typeof data.errors === "string" ? data.errors : JSON.stringify(data.errors, null, 2)}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+});
 
 /* ── Tool call summary extraction ──────────────────────── */
 
@@ -835,36 +967,45 @@ const MessageRow = memo(function MessageRow({
             </div>
           </CollapsibleContent>
         </Collapsible>
-      )}
+       )}
 
-      {/* Text content */}
-      {msg.text && (
-        <div
-          className={cn(
-            "rounded-lg px-3 py-2",
-            msg.role === "user"
-              ? "bg-primary text-primary-foreground ml-auto max-w-[85%]"
-              : "relative group text-foreground",
-          )}
-        >
-          <div className="text-sm">
-            <MarkdownContent
-              content={msg.role === "user" ? stripMandatoryTags(msg.text) : msg.text}
-              className={cn(
-                msg.role === "user" &&
-                  "[&_a]:text-primary-foreground/80 [&_a]:underline",
-              )}
-            />
-          </div>
-          {msg.role === "assistant" && (
-            <div className="absolute top-1 right-1">
-              <CopyButton text={msg.text} />
-            </div>
-          )}
-        </div>
-      )}
+       {/* Text content */}
+       {msg.text && (() => {
+         // Check if entire message is a raw JSON status (no markdown wrapper)
+         const entireStatus = msg.role === "assistant" ? tryParseStatusJson(msg.text) : null;
 
-      {/* Tool calls */}
+         return (
+           <div
+             className={cn(
+               "rounded-lg px-3 py-2",
+               msg.role === "user"
+                 ? "bg-primary text-primary-foreground ml-auto max-w-[85%]"
+                 : "relative group text-foreground",
+             )}
+           >
+             <div className="text-sm">
+               {entireStatus ? (
+                 <StatusCard data={entireStatus} />
+               ) : (
+                 <MarkdownContent
+                   content={msg.role === "user" ? stripMandatoryTags(msg.text) : msg.text}
+                   className={cn(
+                     msg.role === "user" &&
+                       "[&_a]:text-primary-foreground/80 [&_a]:underline",
+                   )}
+                 />
+               )}
+             </div>
+             {msg.role === "assistant" && (
+               <div className="absolute top-1 right-1">
+                 <CopyButton text={msg.text} />
+               </div>
+             )}
+           </div>
+         );
+       })()}
+
+       {/* Tool calls */}
       {msg.tool_calls && msg.tool_calls.length > 0 && (
         <div className="mt-1 space-y-1">
           {msg.tool_calls.map((toolCall) => {
@@ -953,7 +1094,7 @@ const MessageRow = memo(function MessageRow({
 /* ── Todo panel ────────────────────────────────────────── */
 
 const TodoPanel = memo(function TodoPanel({ todos }: { todos: TodoItem[] }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const done = todos.filter((t) => t.status === "completed").length;
   const total = todos.length;
 
@@ -1091,8 +1232,20 @@ export default function SessionDetail({
   const waitingForResponseRef = useRef(false);
   const isNearBottom = useRef(true);
   const shouldAutoScroll = useRef(false);
+  const sessionIdRef = useRef<string | null>(sessionId);
+  const dataRef = useRef<SessionData | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // Keep sessionIdRef in sync
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
+
+  // Keep dataRef in sync
+  useEffect(() => {
+    dataRef.current = data;
+  }, [data]);
 
   // Resize handle
   const onPointerDown = useCallback((e: React.PointerEvent) => {
@@ -1216,7 +1369,7 @@ export default function SessionDetail({
       totalRef.current = countData.total;
 
       // Child sessions: show all messages (no limit). Parent: show last N.
-      const isChild = sid !== sessionId;
+      const isChild = sid !== sessionIdRef.current;
       const limit = isChild ? countData.total : LAST_N;
       const offset = isChild ? 0 : Math.max(0, countData.total - LAST_N);
       const msgRes = await fetch(
@@ -1366,6 +1519,11 @@ export default function SessionDetail({
     if (!sessionId) {
       return;
     }
+    
+    // Reset scroll tracking so auto-scroll-to-bottom fires for the new session
+    prevMessageCountRef.current = 0;
+    isNearBottom.current = true;
+    shouldAutoScroll.current = false;
     
     const activeSessionId = activeChildId || sessionId;
     fetchMessages(activeSessionId);
@@ -1566,11 +1724,16 @@ export default function SessionDetail({
         const newTotal = countData.total;
 
         if (newTotal > totalRef.current) {
+          // Preserve already-loaded older messages: fetch from the same start offset
+          const prevData = dataRef.current;
+          const currentlyLoaded = prevData?.messages?.length || LAST_N;
+          const oldTotal = totalRef.current;
+          const startOffset = Math.max(0, oldTotal - currentlyLoaded);
           totalRef.current = newTotal;
-          // Refetch last N
-          const offset = Math.max(0, newTotal - LAST_N);
+
+          const fetchLimit = newTotal - startOffset;
           const msgRes = await fetch(
-            `/api/sessions/${activeSessionId}/messages?limit=${LAST_N}&offset=${offset}`,
+            `/api/sessions/${activeSessionId}/messages?limit=${fetchLimit}&offset=${startOffset}`,
           );
           if (msgRes.ok) {
             const msgData = await msgRes.json();

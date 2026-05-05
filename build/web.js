@@ -280,6 +280,64 @@ app.post("/api/opencode/question/:questionId/reject", async (req, res) => {
         res.status(502).json({ error: `opencode server unreachable: ${err.message}` });
     }
 });
+// ── Project Summary ────────────────────────────────────────
+app.post("/api/project-summary", async (req, res) => {
+    try {
+        const { directory } = req.body;
+        if (!directory) {
+            res.status(400).json({ error: "directory is required" });
+            return;
+        }
+        // 1. Create session directly via opencode (bypasses kanban card creation)
+        const sessionUrl = new URL(`${OPENCODE_SERVER}/session`);
+        sessionUrl.searchParams.set("directory", directory);
+        const sessionRes = await fetch(sessionUrl.toString(), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+        });
+        if (!sessionRes.ok) {
+            const body = await sessionRes.text().catch(() => "");
+            res.status(sessionRes.status).json({ error: body || `opencode error ${sessionRes.status}` });
+            return;
+        }
+        const session = await sessionRes.json();
+        // 2. Update session directory in kanban DB so getSessionMessages works
+        try {
+            const db = getDb();
+            db.prepare("UPDATE session SET directory = ?, path = ? WHERE id = ?")
+                .run(directory, directory.replace(/^\//, ""), session.id);
+        }
+        catch {
+            // non-critical
+        }
+        // 3. Send the summary prompt via prompt_async (non-blocking)
+        const promptUrl = new URL(`${OPENCODE_SERVER}/session/${session.id}/prompt_async`);
+        promptUrl.searchParams.set("directory", directory);
+        const promptRes = await fetch(promptUrl.toString(), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                parts: [
+                    {
+                        type: "text",
+                        text: "Provide a concise project summary for this codebase. Include: purpose, tech stack, architecture, key modules, and current state. Be thorough but concise. Use markdown formatting.",
+                    },
+                ],
+            }),
+        });
+        if (!promptRes.ok) {
+            const body = await promptRes.text().catch(() => "");
+            res.status(promptRes.status).json({ error: body || `opencode prompt error ${promptRes.status}` });
+            return;
+        }
+        // 4. Return session ID — frontend will poll messages
+        res.json({ session_id: session.id });
+    }
+    catch (err) {
+        res.status(502).json({ error: `opencode server unreachable: ${err.message}` });
+    }
+});
 // ── REST API Routes ─────────────────────────────────────────
 // Boards
 app.get("/api/boards", (req, res) => {
