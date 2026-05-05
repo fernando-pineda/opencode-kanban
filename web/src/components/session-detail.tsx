@@ -7,6 +7,7 @@ import {
   memo,
   useMemo,
 } from "react";
+import ReactDOM from "react-dom";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   X,
@@ -20,13 +21,16 @@ import {
   FileText,
   Search,
   Circle,
+  Check,
   CheckCircle2,
   Clock,
+  Copy,
   ListTodo,
   Shrink,
   ArrowRight,
   Square,
   HelpCircle,
+  Trash2,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -482,16 +486,20 @@ const ToolCallInline = memo(function ToolCallInline({
 const QuestionToolCard = memo(function QuestionToolCard({
   toolCall,
   sessionId,
+  directory,
   onAnswerSubmitted,
 }: {
   toolCall: ToolCall;
   sessionId: string;
+  directory: string | null;
   onAnswerSubmitted: () => void;
 }) {
   const [answers, setAnswers] = useState<Record<number, string[]>>({});
   const [customAnswers, setCustomAnswers] = useState<Record<number, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [questionId, setQuestionId] = useState<string | null>(null);
+  const [questionFetched, setQuestionFetched] = useState(false);
 
   const input = (toolCall.input || {}) as Record<string, any>;
   const questions = Array.isArray(input.questions)
@@ -504,6 +512,30 @@ const QuestionToolCard = memo(function QuestionToolCard({
     : [];
 
   const isRunning = toolCall.status === "running";
+
+  // Fetch the opencode question ID (que_...) that corresponds to this tool call
+  useEffect(() => {
+    if (questionFetched || !isRunning || submitted) return;
+    setQuestionFetched(true);
+    fetch(`/api/opencode/question${directory ? `?directory=${encodeURIComponent(directory)}` : ""}`, { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : []))
+      .then(
+        (
+          qs: Array<{
+            id: string;
+            sessionID: string;
+            tool?: { callID?: string };
+          }>,
+        ) => {
+          const match = qs.find(
+            (q) =>
+              q.sessionID === sessionId && q.tool?.callID === toolCall.callID,
+          );
+          if (match) setQuestionId(match.id);
+        },
+      )
+      .catch(() => {});
+  }, [isRunning, submitted, questionFetched, sessionId, toolCall.callID, directory]);
 
   // If completed, show what was answered
   if (!isRunning || submitted) {
@@ -563,29 +595,58 @@ const QuestionToolCard = memo(function QuestionToolCard({
     if (submitting) return;
     setSubmitting(true);
     try {
-      // Build answer text
-      const answerParts: string[] = [];
+      // Build answers array matching questions order
+      const answerArray: string[][] = [];
       for (let i = 0; i < questions.length; i++) {
-        const q = questions[i];
         const selected = answers[i] || [];
         const custom = customAnswers[i]?.trim();
-        if (selected.length > 0 && custom) {
-          answerParts.push(`**${q.header}**: ${selected.join(", ")} — ${custom}`);
-        } else if (selected.length > 0) {
-          answerParts.push(`**${q.header}**: ${selected.join(", ")}`);
+        if (selected.length > 0) {
+          answerArray.push(selected);
         } else if (custom) {
-          answerParts.push(`**${q.header}**: ${custom}`);
+          answerArray.push([custom]);
+        } else {
+          answerArray.push([]);
         }
       }
-      if (answerParts.length === 0) return;
-      const answerText = answerParts.join("\n");
+      if (answerArray.every((a) => a.length === 0)) return;
 
-      const res = await fetch(`/api/sessions/${sessionId}/respond`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: answerText }),
-      });
-      if (!res.ok) throw new Error(`Failed: ${res.status}`);
+      let qid = questionId;
+      if (!qid) {
+        // Fallback: fetch question list to find the que_ ID
+        const listRes = await fetch(
+          `/api/opencode/question${directory ? `?directory=${encodeURIComponent(directory)}` : ""}`,
+          { cache: "no-store" },
+        );
+        if (listRes.ok) {
+          const list: Array<{
+            id: string;
+            sessionID: string;
+            tool?: { callID?: string };
+          }> = await listRes.json();
+          const match = list.find(
+            (q) =>
+              q.sessionID === sessionId && q.tool?.callID === toolCall.callID,
+          );
+          if (match) {
+            qid = match.id;
+            setQuestionId(match.id);
+          }
+        }
+      }
+
+      if (qid) {
+        const res = await fetch(
+          `/api/opencode/question/${qid}/reply${directory ? `?directory=${encodeURIComponent(directory)}` : ""}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ answers: answerArray }),
+          },
+        );
+        if (!res.ok) throw new Error(`Failed: ${res.status}`);
+      } else {
+        throw new Error("Could not find pending question");
+      }
       setSubmitted(true);
       onAnswerSubmitted();
     } catch (err) {
@@ -680,6 +741,33 @@ const QuestionToolCard = memo(function QuestionToolCard({
   );
 });
 
+const CopyButton = memo(function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      toast.success("Copied to clipboard");
+      setTimeout(() => setCopied(false), 2000);
+    } catch {}
+  }, [text]);
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-muted/50 text-muted-foreground hover:text-foreground"
+      title="Copy message"
+    >
+      {copied ? (
+        <Check className="w-3.5 h-3.5 text-green-500" />
+      ) : (
+        <Copy className="w-3.5 h-3.5" />
+      )}
+    </button>
+  );
+});
+
 const MessageRow = memo(function MessageRow({
   msg,
   prevMsg,
@@ -689,6 +777,7 @@ const MessageRow = memo(function MessageRow({
   children,
   onViewChild,
   sessionId,
+  directory,
   onAnswerSubmitted,
 }: {
   msg: Message;
@@ -699,6 +788,7 @@ const MessageRow = memo(function MessageRow({
   children: ChildSession[];
   onViewChild: (childId: string) => void;
   sessionId: string;
+  directory: string | null;
   onAnswerSubmitted: () => void;
 }) {
   const isTurnEnd =
@@ -754,7 +844,7 @@ const MessageRow = memo(function MessageRow({
             "rounded-lg px-3 py-2",
             msg.role === "user"
               ? "bg-primary text-primary-foreground ml-auto max-w-[85%]"
-              : "text-foreground",
+              : "relative group text-foreground",
           )}
         >
           <div className="text-sm">
@@ -766,6 +856,11 @@ const MessageRow = memo(function MessageRow({
               )}
             />
           </div>
+          {msg.role === "assistant" && (
+            <div className="absolute top-1 right-1">
+              <CopyButton text={msg.text} />
+            </div>
+          )}
         </div>
       )}
 
@@ -779,6 +874,7 @@ const MessageRow = memo(function MessageRow({
                   key={toolCall.callID}
                   toolCall={toolCall}
                   sessionId={sessionId}
+                  directory={directory}
                   onAnswerSubmitted={onAnswerSubmitted}
                 />
               );
@@ -980,6 +1076,7 @@ export default function SessionDetail({
   const [width, setWidth] = useState(() => window.innerWidth * 0.5);
   const [children, setChildren] = useState<ChildSession[]>([]);
   const [sessionStatuses, setSessionStatuses] = useState<SessionStatusMap>({});
+  const sessionDirRef = useRef<string | null>(null);
   const [activeChildId, setActiveChildId] = useState<string | null>(null);
   const [modelContextLimits, setModelContextLimits] = useState<Record<string, number>>({});
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -995,6 +1092,7 @@ export default function SessionDetail({
   const isNearBottom = useRef(true);
   const shouldAutoScroll = useRef(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   // Resize handle
   const onPointerDown = useCallback((e: React.PointerEvent) => {
@@ -1093,7 +1191,12 @@ export default function SessionDetail({
       if (!res.ok) {
         throw new Error(`Failed to abort session: ${res.status}`);
       }
-      // Success - the polling will detect the status change from "busy" to "idle"
+      // Immediately update local state so the UI reflects the abort right away
+      waitingForResponseRef.current = false;
+      setSessionStatuses((prev) => ({
+        ...prev,
+        [targetId]: { type: "idle" },
+      }));
     } catch (err) {
       console.error("Failed to stop session:", err);
     }
@@ -1121,6 +1224,7 @@ export default function SessionDetail({
       );
       if (!msgRes.ok) throw new Error(`Failed: ${msgRes.status}`);
       const msgData = await msgRes.json();
+      sessionDirRef.current = msgData.directory;
       setData(msgData);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
@@ -1366,6 +1470,40 @@ export default function SessionDetail({
     isNearBottom.current = scrollHeight - scrollTop - clientHeight < 150;
   }, []);
 
+   // Compute isBusy at component level (not inside useEffect)
+     // This ensures it's available for JSX rendering and polling interval
+     const activeId = activeChildId || sessionId;
+     
+     // Check if last assistant message has running tool calls (fallback for TUI sessions)
+     const hasRunningToolCall = data && data.messages.length > 0 
+       ? data.messages[data.messages.length - 1].tool_calls?.some(tc => tc.status === "running") || false
+       : false;
+
+     const isBusy = activeId 
+       ? (sessionStatuses[activeId]?.type === "busy" || sessionStatuses[activeId]?.type === "retry" || hasRunningToolCall || waitingForResponseRef.current) 
+       : false;
+
+     // Pagination: check if we have more messages to load
+     const hasMoreMessages = data ? data.messages.length < data.total : false;
+
+     // Filter out empty messages for display
+     const visibleMessages = useMemo(() => {
+       if (!data) return [];
+       return data.messages.filter((msg) => 
+         msg.text || msg.reasoning || (msg.tool_calls && msg.tool_calls.length > 0) || (msg.compactions && msg.compactions.length > 0)
+       );
+     }, [data]);
+
+     // Setup virtualizer
+     const virtualizer = useVirtualizer({
+       count: visibleMessages.length,
+       getScrollElement: () => scrollRef.current,
+       estimateSize: () => 100,
+       getItemKey: (index) => visibleMessages[index]?.id ?? index,
+       measureElement: typeof window !== "undefined" ? (element) => element?.getBoundingClientRect().height : undefined,
+       overscan: 5,
+     });
+
   // Auto-scroll to bottom
   useEffect(() => {
     if (!data || !scrollRef.current) return;
@@ -1381,54 +1519,19 @@ export default function SessionDetail({
 
     if (shouldScroll) {
       shouldAutoScroll.current = false; // Reset flag after use
-      // First rAF: let virtualizer render items, then scroll to estimated bottom.
-      // Second rAF: virtualizer has now measured actual sizes and re-rendered,
-      // so scrollHeight is accurate — scroll to the real bottom.
-      requestAnimationFrame(() => {
-        if (scrollRef.current) {
-          scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      // Double rAF: first lets the virtualizer render + ResizeObserver measure,
+      // second scrolls to the now-measured position.
+      const lastIdx = visibleMessages.length - 1;
+      if (lastIdx >= 0) {
+        requestAnimationFrame(() => {
+          virtualizer.scrollToIndex(lastIdx, { align: "end" });
           requestAnimationFrame(() => {
-            if (scrollRef.current) {
-              scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-            }
+            virtualizer.scrollToIndex(lastIdx, { align: "end" });
           });
-        }
-      });
+        });
+      }
     }
-  }, [data?.messages.length, open]);
-
-   // Compute isBusy at component level (not inside useEffect)
-    // This ensures it's available for JSX rendering and polling interval
-    const activeId = activeChildId || sessionId;
-    
-    // Check if last assistant message has running tool calls (fallback for TUI sessions)
-    const hasRunningToolCall = data && data.messages.length > 0 
-      ? data.messages[data.messages.length - 1].tool_calls?.some(tc => tc.status === "running") || false
-      : false;
-
-    const isBusy = activeId 
-      ? (sessionStatuses[activeId]?.type === "busy" || sessionStatuses[activeId]?.type === "retry" || hasRunningToolCall || waitingForResponseRef.current) 
-      : false;
-
-    // Pagination: check if we have more messages to load
-    const hasMoreMessages = data ? data.messages.length < data.total : false;
-
-    // Filter out empty messages for display
-    const visibleMessages = useMemo(() => {
-      if (!data) return [];
-      return data.messages.filter((msg) => 
-        msg.text || msg.reasoning || (msg.tool_calls && msg.tool_calls.length > 0) || (msg.compactions && msg.compactions.length > 0)
-      );
-    }, [data]);
-
-    // Setup virtualizer
-    const virtualizer = useVirtualizer({
-      count: visibleMessages.length,
-      getScrollElement: () => scrollRef.current,
-      estimateSize: () => 100,
-      measureElement: typeof window !== "undefined" ? (element) => element?.getBoundingClientRect().height : undefined,
-      overscan: 5,
-    });
+  }, [data?.messages.length, open, visibleMessages.length, virtualizer]);
 
     // Compute context limit based on model
     const modelStr = data
@@ -1531,26 +1634,27 @@ export default function SessionDetail({
           setTodos(Array.isArray(todoData) ? todoData : []);
         }
 
-        // Always refresh children and statuses (using parent sessionId)
-        const childRes = await fetch(
-          `/api/opencode/session/${sessionId}/children`,
-        );
-        if (childRes.ok) {
-          const childData = await childRes.json();
-          const sorted = Array.isArray(childData)
-            ? childData.sort(
-                (a: ChildSession, b: ChildSession) =>
-                  b.time.updated - a.time.updated,
-              )
-            : [];
-          setChildren(sorted);
-        }
+         // Always refresh children and statuses (using parent sessionId)
+         const childRes = await fetch(
+           `/api/opencode/session/${sessionId}/children`,
+         );
+         if (childRes.ok) {
+           const childData = await childRes.json();
+           const sorted = Array.isArray(childData)
+             ? childData.sort(
+                 (a: ChildSession, b: ChildSession) =>
+                   b.time.updated - a.time.updated,
+               )
+             : [];
+           setChildren(sorted);
+         }
 
-        const statusRes = await fetch(`/api/opencode/session/status`);
-        if (statusRes.ok) {
-          const statusData = await statusRes.json();
-          setSessionStatuses(statusData);
-        }
+         const dir = sessionDirRef.current;
+         const statusRes = await fetch(`/api/opencode/session/status` + (dir ? `?directory=${encodeURIComponent(dir)}` : ""));
+         if (statusRes.ok) {
+           const statusData = await statusRes.json();
+           setSessionStatuses(statusData);
+         }
       } catch {
         // next poll will retry
       }
@@ -1562,9 +1666,25 @@ export default function SessionDetail({
 
     const interval = setInterval(poll, pollInterval);
 
-    // SSE for immediate triggers
+    // SSE for immediate triggers — also parse opencode session status events directly
     const es = new EventSource("/api/events");
-    es.onmessage = () => poll();
+    es.onmessage = (event) => {
+      try {
+        const eventData = JSON.parse(event.data);
+        if (eventData.type === "opencode_session_status" && eventData.sessionID) {
+          // Update session status immediately without waiting for poll
+          setSessionStatuses((prev) => ({
+            ...prev,
+            [eventData.sessionID]: eventData.status,
+          }));
+          const activeId = activeChildId || sessionId;
+          if (eventData.sessionID === activeId && eventData.status?.type !== "busy" && eventData.status?.type !== "retry") {
+            waitingForResponseRef.current = false;
+          }
+        }
+      } catch {}
+      poll();
+    };
 
     return () => {
       clearInterval(interval);
@@ -1572,17 +1692,17 @@ export default function SessionDetail({
     };
   }, [open, sessionId, activeChildId, isBusy]);
 
-  // Clear waitingForResponseRef when data updates show the response has arrived
-  // This must be a separate effect from polling so it uses fresh data (not stale closure)
+  // Clear waitingForResponseRef only when the agent response is truly complete.
+  // We do NOT clear on user messages because the optimistic user message added
+  // by sendMessage triggers this effect immediately, causing a flicker where
+  // isBusy → false → true. Instead, the ref is cleared by:
+  //   1. Session status polling confirming idle (in the polling effect above)
+  //   2. A completed assistant response with no running tool calls
   useEffect(() => {
     if (!waitingForResponseRef.current || !data) return;
     const lastMsg = data.messages[data.messages.length - 1];
     if (!lastMsg) return;
-    if (lastMsg.role === "user") {
-      // User message appeared (our answer was received) — clear the flag;
-      // session status polling will track the ongoing busy state
-      waitingForResponseRef.current = false;
-    } else if (lastMsg.role === "assistant") {
+    if (lastMsg.role === "assistant") {
       const hasRunning = lastMsg.tool_calls?.some(tc => tc.status === "running") || false;
       if (!hasRunning) {
         waitingForResponseRef.current = false;
@@ -1671,14 +1791,26 @@ export default function SessionDetail({
               </Tooltip>
             )}
           </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => onOpenChange(false)}
-            className="h-6 w-6 p-0"
-          >
-            <X className="w-4 h-4" />
-          </Button>
+           <div className="flex items-center gap-2">
+             {sessionId && (
+               <Button
+                 variant="ghost"
+                 size="sm"
+                 onClick={() => setConfirmDelete(true)}
+                 className="h-6 w-6 p-0"
+               >
+                 <Trash2 className="w-4 h-4" />
+               </Button>
+             )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onOpenChange(false)}
+              className="h-6 w-6 p-0"
+            >
+              <X className="w-4 h-4" />
+            </Button>
+          </div>
         </div>
 
         {/* Messages */}
@@ -1732,22 +1864,23 @@ export default function SessionDetail({
                          transform: `translateY(${virtualRow.start}px)`,
                        }}
                      >
-                      <MessageRow
-                        msg={msg}
-                        prevMsg={prevMsg}
-                        nextMsg={nextMsg}
-                        isLast={isLast}
-                        sessionStatuses={sessionStatuses}
-                        children={children}
-                        onViewChild={handleViewChild}
-                        sessionId={activeChildId || sessionId || ""}
-                        onAnswerSubmitted={() => {
-                          // Trigger a poll to refresh messages
-                          waitingForResponseRef.current = true;
-                          shouldAutoScroll.current = true;
-                          isNearBottom.current = true;
-                        }}
-                      />
+                       <MessageRow
+                         msg={msg}
+                         prevMsg={prevMsg}
+                         nextMsg={nextMsg}
+                         isLast={isLast}
+                         sessionStatuses={sessionStatuses}
+                         children={children}
+                         onViewChild={handleViewChild}
+                         sessionId={activeChildId || sessionId || ""}
+                         directory={data?.directory ?? null}
+                         onAnswerSubmitted={() => {
+                           // Trigger a poll to refresh messages
+                           waitingForResponseRef.current = true;
+                           shouldAutoScroll.current = true;
+                           isNearBottom.current = true;
+                         }}
+                       />
                     </div>
                   );
                 })}
@@ -1939,8 +2072,50 @@ export default function SessionDetail({
                   </div>
                 </div>
                )}
-          </div>
-        </div>
-      </>
-    );
-  }
+           </div>
+         </div>
+
+       {/* Delete confirmation dialog */}
+       {confirmDelete && ReactDOM.createPortal(
+         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50">
+           <div className="bg-popover text-popover-foreground rounded-lg border p-4 shadow-lg max-w-sm mx-4 space-y-3">
+             <h3 className="font-semibold text-sm">Delete session</h3>
+             <p className="text-sm text-muted-foreground">
+               Permanently delete this session and all its messages? This cannot be undone.
+             </p>
+             <div className="flex justify-end gap-2">
+               <Button
+                 variant="outline"
+                 size="sm"
+                 onClick={() => setConfirmDelete(false)}
+               >
+                 Cancel
+               </Button>
+               <Button
+                 variant="destructive"
+                 size="sm"
+                 onClick={async () => {
+                   try {
+                     const response = await fetch(`/api/sessions/${sessionId}`, { method: "DELETE" });
+                     if (response.ok) {
+                       toast.success("Session deleted");
+                       setConfirmDelete(false);
+                       onOpenChange(false);
+                     } else {
+                       toast.error("Failed to delete session");
+                     }
+                   } catch (error) {
+                     toast.error("Error deleting session");
+                   }
+                 }}
+               >
+                 Delete
+               </Button>
+             </div>
+           </div>
+         </div>,
+         document.body
+       )}
+       </>
+     );
+   }

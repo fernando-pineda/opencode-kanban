@@ -13,6 +13,7 @@ export const EVENT_TYPES = {
   AGENT_LOG_ADDED: 'agent_log_added',
   SESSION_STARTED: 'session_started',
   SESSION_ENDED: 'session_ended',
+  OPENCODE_SESSION_STATUS: 'opencode_session_status',
 } as const;
 
 export type KanbanEvents = (typeof EVENT_TYPES)[keyof typeof EVENT_TYPES];
@@ -28,6 +29,7 @@ export interface KanbanEventPayloads {
   agent_log_added: { session_id: string; agent_name: string; action: string };
   session_started: { session_id: number; board_id: number };
   session_ended: { session_id: number };
+  opencode_session_status: { sessionID: string; status: { type: string } };
 }
 
 // ── Typed event bus ─────────────────────────────────────────

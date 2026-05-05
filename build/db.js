@@ -244,7 +244,7 @@ export function searchCards(boardId, query) {
         return [];
     const like = `%${query}%`;
     const sessions = db
-        .prepare("SELECT id, directory, title, time_created, time_updated, time_compacting FROM session WHERE parent_id IS NULL AND (title LIKE ? OR directory LIKE ?) ORDER BY time_updated DESC")
+        .prepare("SELECT id, directory, title, time_created, time_updated, time_compacting FROM session WHERE parent_id IS NULL AND id NOT IN (SELECT session_id FROM kanban_deleted_sessions) AND (title LIKE ? OR directory LIKE ?) ORDER BY time_updated DESC")
         .all(like, like);
     const completedSet = new Set(db.prepare("SELECT session_id FROM kanban_completed").all().map((r) => r.session_id));
     const nowMs = Date.now();
@@ -390,7 +390,7 @@ export function getBoardFull(boardId) {
     const completedSet = new Set(db.prepare("SELECT session_id FROM kanban_completed").all().map((r) => r.session_id));
     // Get matching sessions (parent only, matching directory or subdirectory)
     const sessions = db
-        .prepare("SELECT id, directory, title, time_created, time_updated, time_compacting FROM session WHERE parent_id IS NULL ORDER BY time_updated DESC")
+        .prepare("SELECT id, directory, title, time_created, time_updated, time_compacting FROM session WHERE parent_id IS NULL AND id NOT IN (SELECT session_id FROM kanban_deleted_sessions) ORDER BY time_updated DESC")
         .all();
     const nowMs = Date.now();
     const cards = [];
@@ -444,7 +444,14 @@ export function getSessionMessages(sessionId, limit = 50, offset = 0) {
     const messages = [];
     let sessionModel = null;
     for (const messageRow of messageRows) {
-        const msgData = JSON.parse(messageRow.msg_data);
+        let msgData;
+        try {
+            msgData = JSON.parse(messageRow.msg_data);
+        }
+        catch {
+            console.error(`[kanban-db] Skipping malformed message ${messageRow.id}: JSON parse failed`);
+            continue;
+        }
         const role = msgData.role || "user";
         const model = msgData.model || null;
         const agent = msgData.agent || null;
@@ -461,7 +468,14 @@ export function getSessionMessages(sessionId, limit = 50, offset = 0) {
         const toolCalls = [];
         const compactions = [];
         for (const partRow of partRows) {
-            const partData = JSON.parse(partRow.data);
+            let partData;
+            try {
+                partData = JSON.parse(partRow.data);
+            }
+            catch {
+                console.error(`[kanban-db] Skipping malformed part in message ${messageRow.id}: JSON parse failed`);
+                continue;
+            }
             if (partData.type === "text" && partData.text) {
                 textContent += partData.text;
             }
@@ -629,6 +643,14 @@ export function getDistinctRepos() {
         .prepare("SELECT DISTINCT repo_path FROM kanban_boards WHERE status = ? ORDER BY repo_path")
         .all("active");
     return rows.map((r) => r.repo_path);
+}
+export function deleteSession(sessionId) {
+    db.prepare("INSERT OR IGNORE INTO kanban_deleted_sessions (session_id) VALUES (?)").run(sessionId);
+    db.prepare("DELETE FROM kanban_completed WHERE session_id = ?").run(sessionId);
+    db.prepare("DELETE FROM kanban_session_columns WHERE session_id = ?").run(sessionId);
+    db.prepare("DELETE FROM kanban_subtasks WHERE session_id = ?").run(sessionId);
+    db.prepare("DELETE FROM kanban_agent_logs WHERE session_id = ?").run(sessionId);
+    emitBoardChange("card_deleted", { session_id: sessionId });
 }
 export function closeDb() {
     db.close();

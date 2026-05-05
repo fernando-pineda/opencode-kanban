@@ -5,7 +5,7 @@ import { fileURLToPath } from "url";
 import { dirname } from "path";
 import os from "os";
 import fs from "fs";
-import { createServer } from "http";
+import { createServer, request as httpRequest } from "http";
 import { setupTerminalServer } from "./terminal.js";
 import { exec } from "child_process";
 // ── Proxy to opencode's embedded HTTP server ──────────────
@@ -51,7 +51,7 @@ async function proxyToOpencode(req, res) {
     }
 }
 import { bus, EVENT_TYPES, emitBoardChange } from "./event-bus.js";
-import { listBoards, getBoardFull, getOrCreateBoard, archiveBoard, moveSessionToColumn, searchCards, getSubtasks, createSubtask, updateSubtask, deleteSubtask, addAgentLog, getAgentLogs, getDistinctRepos, markSessionCompleted, unmarkSessionCompleted, getSessionMessages, getEnabledRulesContent, listRules, createRule, updateRule, deleteRule, getDb, getAllSettings, setSetting, getAutoCompactThreshold, isAutoCompactEnabled, getSessionTokens, getSessionModel, getActiveSessionIds, } from "./db.js";
+import { listBoards, getBoardFull, getOrCreateBoard, archiveBoard, moveSessionToColumn, searchCards, getSubtasks, createSubtask, updateSubtask, deleteSubtask, addAgentLog, getAgentLogs, getDistinctRepos, markSessionCompleted, unmarkSessionCompleted, getSessionMessages, getEnabledRulesContent, listRules, createRule, updateRule, deleteRule, getDb, getAllSettings, setSetting, getAutoCompactThreshold, isAutoCompactEnabled, getSessionTokens, getSessionModel, getActiveSessionIds, deleteSession, } from "./db.js";
 // ── Setup ────────────────────────────────────────────────────
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -209,20 +209,37 @@ app.post("/api/sessions/:sessionId/send", async (req, res) => {
         res.status(502).json({ error: `opencode server unreachable: ${err.message}` });
     }
 });
-// ── Respond to pending question tool ──────────────────────────────────────
-app.post("/api/sessions/:sessionId/respond", async (req, res) => {
+// ── Question tool proxy (opencode question API) ──────────────────────
+// GET pending questions
+app.get("/api/opencode/question", async (req, res) => {
     try {
-        const { sessionId } = req.params;
-        const { text } = req.body;
-        if (!text?.trim()) {
-            res.status(400).json({ error: "Response text is required" });
+        const url = new URL(`${OPENCODE_SERVER}/question`);
+        const dir = req.query.directory;
+        if (dir)
+            url.searchParams.set("directory", dir);
+        const opencodeRes = await fetch(url.toString());
+        if (!opencodeRes.ok) {
+            const body = await opencodeRes.text().catch(() => "");
+            res.status(opencodeRes.status).json({ error: body || `opencode error ${opencodeRes.status}` });
             return;
         }
-        const sessionDir = getSessionDirectory(sessionId);
-        const respondUrl = new URL(`${OPENCODE_SERVER}/session/${sessionId}/respond`);
-        if (sessionDir)
-            respondUrl.searchParams.set("directory", sessionDir);
-        const opencodeRes = await fetch(respondUrl.toString(), {
+        const data = await opencodeRes.json();
+        res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+        res.json(data);
+    }
+    catch (err) {
+        res.status(502).json({ error: `opencode server unreachable: ${err.message}` });
+    }
+});
+// POST reply to a question
+app.post("/api/opencode/question/:questionId/reply", async (req, res) => {
+    try {
+        const { questionId } = req.params;
+        const url = new URL(`${OPENCODE_SERVER}/question/${questionId}/reply`);
+        const dir = req.query.directory;
+        if (dir)
+            url.searchParams.set("directory", dir);
+        const opencodeRes = await fetch(url.toString(), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(req.body),
@@ -232,7 +249,32 @@ app.post("/api/sessions/:sessionId/respond", async (req, res) => {
             res.status(opencodeRes.status).json({ error: body || `opencode error ${opencodeRes.status}` });
             return;
         }
-        res.status(200).json({ ok: true });
+        const data = await opencodeRes.json();
+        res.json(data);
+    }
+    catch (err) {
+        res.status(502).json({ error: `opencode server unreachable: ${err.message}` });
+    }
+});
+// POST reject a question
+app.post("/api/opencode/question/:questionId/reject", async (req, res) => {
+    try {
+        const { questionId } = req.params;
+        const url = new URL(`${OPENCODE_SERVER}/question/${questionId}/reject`);
+        const dir = req.query.directory;
+        if (dir)
+            url.searchParams.set("directory", dir);
+        const opencodeRes = await fetch(url.toString(), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+        });
+        if (!opencodeRes.ok) {
+            const body = await opencodeRes.text().catch(() => "");
+            res.status(opencodeRes.status).json({ error: body || `opencode error ${opencodeRes.status}` });
+            return;
+        }
+        const data = await opencodeRes.json();
+        res.json(data);
     }
     catch (err) {
         res.status(502).json({ error: `opencode server unreachable: ${err.message}` });
@@ -250,10 +292,27 @@ app.get("/api/boards", (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
-app.get("/api/boards/:id", (req, res) => {
+app.get("/api/boards/:id", async (req, res) => {
     try {
         const boardId = parseInt(req.params.id, 10);
         const boardFull = getBoardFull(boardId);
+        // Fetch session statuses from opencode to determine is_busy for each card
+        // The directory parameter is required — without it the endpoint returns {}
+        try {
+            const statusUrl = new URL(`${OPENCODE_SERVER}/session/status`);
+            if (boardFull.board.repo_path)
+                statusUrl.searchParams.set("directory", boardFull.board.repo_path);
+            const statusRes = await fetch(statusUrl.toString());
+            if (statusRes.ok) {
+                const statuses = await statusRes.json();
+                for (const card of boardFull.cards) {
+                    card.is_busy = statuses[card.session_id]?.type === "busy" || statuses[card.session_id]?.type === "retry" || false;
+                }
+            }
+        }
+        catch {
+            // Status fetch is non-critical; cards default to is_busy = undefined
+        }
         res.json(boardFull);
     }
     catch (error) {
@@ -314,6 +373,16 @@ app.post("/api/sessions/:sessionId/uncomplete", (req, res) => {
     try {
         const { sessionId } = req.params;
         unmarkSessionCompleted(sessionId);
+        res.json({ success: true });
+    }
+    catch (error) {
+        res.status(400).json({ error: error.message });
+    }
+});
+app.delete("/api/sessions/:sessionId", (req, res) => {
+    try {
+        const { sessionId } = req.params;
+        deleteSession(sessionId);
         res.json({ success: true });
     }
     catch (error) {
@@ -507,6 +576,12 @@ app.get("/api/events", (req, res) => {
         bus.on(eventType, typedHandler);
         cleanup.push(() => bus.off(eventType, typedHandler));
     }
+    // Also relay opencode session status events
+    const statusHandler = (payload) => {
+        handler({ type: "opencode_session_status", ...payload });
+    };
+    bus.on("opencode_session_status", statusHandler);
+    cleanup.push(() => bus.off("opencode_session_status", statusHandler));
     req.on("close", () => {
         cleanup.forEach((fn) => fn());
     });
@@ -689,6 +764,90 @@ async function checkAutoCompact() {
 setInterval(checkAutoCompact, 30000);
 // Initial check after 10 seconds (let server start up)
 setTimeout(checkAutoCompact, 10000);
+// ── OpenCode SSE Relay ──────────────────────────────────────
+// Subscribe to opencode's SSE event stream and relay session.status events
+// through the kanban event bus so the frontend gets immediate updates.
+/** Try to extract valid JSON from an SSE data line, handling double-prefixed data */
+function safeParseSSELine(line) {
+    if (!line.startsWith("data: "))
+        return null;
+    let jsonStr = line.slice(6);
+    // Handle double-prefixed data: "data: {"id":"data: {…}"}"
+    // If the JSON string starts with { and contains "data: " as a value, try stripping the outer wrapper
+    try {
+        return JSON.parse(jsonStr);
+    }
+    catch {
+        // Try to find the inner JSON object if the outer one is malformed
+        const innerMatch = jsonStr.match(/"data:\s*(\{.*\})"/s);
+        if (innerMatch) {
+            try {
+                return JSON.parse(innerMatch[1]);
+            }
+            catch {
+                // Give up
+            }
+        }
+    }
+    return null;
+}
+function subscribeToOpencodeEvents() {
+    // We need to subscribe to the SSE stream per-workspace (directory).
+    // Subscribe to each active board's workspace and relay all events.
+    const connect = (directory) => {
+        try {
+            const url = new URL(`${OPENCODE_SERVER}/event`);
+            if (directory)
+                url.searchParams.set("directory", directory);
+            const req = httpRequest(url, (upstreamRes) => {
+                let buffer = "";
+                upstreamRes.on("data", (chunk) => {
+                    buffer += chunk.toString();
+                    const lines = buffer.split("\n");
+                    buffer = lines.pop() || "";
+                    for (const line of lines) {
+                        if (line.startsWith("data: ")) {
+                            try {
+                                const eventData = JSON.parse(line.slice(6));
+                                if (eventData.type === "session.status" && eventData.properties?.sessionID) {
+                                    bus.emit("opencode_session_status", {
+                                        sessionID: eventData.properties.sessionID,
+                                        status: eventData.properties.status,
+                                    });
+                                }
+                            }
+                            catch {
+                                // ignore parse errors
+                            }
+                        }
+                    }
+                });
+                upstreamRes.on("end", () => {
+                    setTimeout(() => connect(directory), 3000);
+                });
+            });
+            req.on("error", () => {
+                setTimeout(() => connect(directory), 5000);
+            });
+            req.end();
+        }
+        catch {
+            setTimeout(() => connect(directory), 5000);
+        }
+    };
+    // Connect for each active board's workspace
+    try {
+        const boards = listBoards();
+        for (const board of boards) {
+            if (board.repo_path)
+                connect(board.repo_path);
+        }
+    }
+    catch {
+        // retry later
+    }
+}
+subscribeToOpencodeEvents();
 // ── Static Files & SPA Fallback ────────────────────────────
 const distPath = path.join(__dirname, "..", "dist", "web");
 app.use(express.static(distPath));

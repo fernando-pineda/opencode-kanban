@@ -20,6 +20,7 @@ export interface Card {
     directory: string;
     context_tokens: number;
     is_compacting: boolean;
+    is_busy?: boolean;
     manually_completed: boolean;
     time_created: string;
     time_updated: string;

@@ -31,6 +31,12 @@ CREATE TABLE IF NOT EXISTS kanban_session_columns (
   updated_at TEXT DEFAULT (datetime('now'))
 );
 
+-- Kanban deleted sessions — sessions hidden from the kanban board
+CREATE TABLE IF NOT EXISTS kanban_deleted_sessions (
+  session_id TEXT PRIMARY KEY,
+  deleted_at TEXT DEFAULT (datetime('now'))
+);
+
 -- Kanban subtasks — agent tracking within a session, grouped by repository/worktree
 CREATE TABLE IF NOT EXISTS kanban_subtasks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,6 +76,7 @@ CREATE INDEX IF NOT EXISTS idx_kanban_boards_repo ON kanban_boards(repo_path);
 CREATE INDEX IF NOT EXISTS idx_kanban_boards_status ON kanban_boards(status);
 CREATE INDEX IF NOT EXISTS idx_kanban_completed_session ON kanban_completed(session_id);
 CREATE INDEX IF NOT EXISTS idx_kanban_session_columns_session ON kanban_session_columns(session_id);
+CREATE INDEX IF NOT EXISTS idx_kanban_deleted_sessions_session ON kanban_deleted_sessions(session_id);
 
 -- Rules — user-defined rules injected into every message as <mandatory> tags
 CREATE TABLE IF NOT EXISTS kanban_rules (

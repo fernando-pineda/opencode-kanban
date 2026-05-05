@@ -81,5 +81,6 @@ export declare function getActiveSessionIds(): Array<{
     directory: string;
 }>;
 export declare function getDistinctRepos(): string[];
+export declare function deleteSession(sessionId: string): void;
 export declare function closeDb(): void;
 export {};

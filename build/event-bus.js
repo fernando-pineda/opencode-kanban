@@ -11,6 +11,7 @@ export const EVENT_TYPES = {
     AGENT_LOG_ADDED: 'agent_log_added',
     SESSION_STARTED: 'session_started',
     SESSION_ENDED: 'session_ended',
+    OPENCODE_SESSION_STATUS: 'opencode_session_status',
 };
 // ── Typed event bus ─────────────────────────────────────────
 class KanbanEventBus extends EventEmitter {

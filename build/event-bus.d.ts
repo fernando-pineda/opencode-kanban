@@ -10,6 +10,7 @@ export declare const EVENT_TYPES: {
     readonly AGENT_LOG_ADDED: "agent_log_added";
     readonly SESSION_STARTED: "session_started";
     readonly SESSION_ENDED: "session_ended";
+    readonly OPENCODE_SESSION_STATUS: "opencode_session_status";
 };
 export type KanbanEvents = (typeof EVENT_TYPES)[keyof typeof EVENT_TYPES];
 export interface KanbanEventPayloads {
@@ -52,6 +53,12 @@ export interface KanbanEventPayloads {
     };
     session_ended: {
         session_id: number;
+    };
+    opencode_session_status: {
+        sessionID: string;
+        status: {
+            type: string;
+        };
     };
 }
 declare class KanbanEventBus extends EventEmitter {

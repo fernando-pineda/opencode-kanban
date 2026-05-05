@@ -334,7 +334,7 @@ export function searchCards(boardId: number, query: string): Card[] {
   const like = `%${query}%`;
   const sessions = db
     .prepare(
-      "SELECT id, directory, title, time_created, time_updated, time_compacting FROM session WHERE parent_id IS NULL AND (title LIKE ? OR directory LIKE ?) ORDER BY time_updated DESC",
+      "SELECT id, directory, title, time_created, time_updated, time_compacting FROM session WHERE parent_id IS NULL AND id NOT IN (SELECT session_id FROM kanban_deleted_sessions) AND (title LIKE ? OR directory LIKE ?) ORDER BY time_updated DESC",
     )
     .all(like, like) as any[];
 
@@ -580,7 +580,7 @@ export function getBoardFull(boardId: number): BoardFull {
   // Get matching sessions (parent only, matching directory or subdirectory)
   const sessions = db
     .prepare(
-      "SELECT id, directory, title, time_created, time_updated, time_compacting FROM session WHERE parent_id IS NULL ORDER BY time_updated DESC",
+      "SELECT id, directory, title, time_created, time_updated, time_compacting FROM session WHERE parent_id IS NULL AND id NOT IN (SELECT session_id FROM kanban_deleted_sessions) ORDER BY time_updated DESC",
     )
     .all() as any[];
 
@@ -712,7 +712,13 @@ export function getSessionMessages(
   let sessionModel: string | null = null;
 
   for (const messageRow of messageRows) {
-    const msgData = JSON.parse(messageRow.msg_data);
+    let msgData: any;
+    try {
+      msgData = JSON.parse(messageRow.msg_data);
+    } catch {
+      console.error(`[kanban-db] Skipping malformed message ${messageRow.id}: JSON parse failed`);
+      continue;
+    }
     const role = msgData.role || "user";
     const model = msgData.model || null;
     const agent = msgData.agent || null;
@@ -735,7 +741,13 @@ export function getSessionMessages(
     const compactions: Array<{ auto: boolean; tail_start_id: string }> = [];
 
     for (const partRow of partRows) {
-      const partData = JSON.parse(partRow.data) as MessagePart;
+      let partData: MessagePart;
+      try {
+        partData = JSON.parse(partRow.data) as MessagePart;
+      } catch {
+        console.error(`[kanban-db] Skipping malformed part in message ${messageRow.id}: JSON parse failed`);
+        continue;
+      }
 
       if (partData.type === "text" && partData.text) {
         textContent += partData.text;
@@ -923,6 +935,15 @@ export function getDistinctRepos(): string[] {
     )
     .all("active") as { repo_path: string }[];
   return rows.map((r) => r.repo_path);
+}
+
+export function deleteSession(sessionId: string): void {
+  db.prepare("INSERT OR IGNORE INTO kanban_deleted_sessions (session_id) VALUES (?)").run(sessionId);
+  db.prepare("DELETE FROM kanban_completed WHERE session_id = ?").run(sessionId);
+  db.prepare("DELETE FROM kanban_session_columns WHERE session_id = ?").run(sessionId);
+  db.prepare("DELETE FROM kanban_subtasks WHERE session_id = ?").run(sessionId);
+  db.prepare("DELETE FROM kanban_agent_logs WHERE session_id = ?").run(sessionId);
+  emitBoardChange("card_deleted", { session_id: sessionId });
 }
 
 export function closeDb(): void {

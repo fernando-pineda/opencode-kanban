@@ -44,22 +44,24 @@ function formatDate(isoDate: string): string {
 function StatusIcon({
   columnName,
   isCompacting,
+  isBusy,
 }: {
   columnName: string;
   isCompacting: boolean;
+  isBusy?: boolean;
 }) {
-  if (columnName === "Done") {
-    return <CheckCircle2 className="h-4 w-4 text-emerald-500 flex-shrink-0" />;
+  if (isBusy) {
+    return (
+      <Loader2 className="h-4 w-4 text-blue-500 animate-spin flex-shrink-0" />
+    );
   }
   if (isCompacting) {
     return (
       <Database className="h-4 w-4 text-amber-500 animate-pulse flex-shrink-0" />
     );
   }
-  if (columnName === "In Progress") {
-    return (
-      <Loader2 className="h-4 w-4 text-muted-foreground animate-spin flex-shrink-0" />
-    );
+  if (columnName === "Done") {
+    return <CheckCircle2 className="h-4 w-4 text-emerald-500 flex-shrink-0" />;
   }
   return <Circle className="h-4 w-4 text-muted-foreground flex-shrink-0" />;
 }
@@ -125,6 +127,7 @@ export default function KanbanCard({ card, onClick }: KanbanCardProps) {
         <StatusIcon
           columnName={columnName}
           isCompacting={card.is_compacting}
+          isBusy={card.is_busy}
         />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">

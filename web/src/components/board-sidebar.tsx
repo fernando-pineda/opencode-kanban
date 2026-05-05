@@ -28,9 +28,9 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { Board } from "../types";
-import { Plus, Trash2, Settings } from "lucide-react";
-import WorkspacePicker from "./workspace-picker";
+import { Trash2, Settings, Plus } from "lucide-react";
 import SettingsDialog from "./settings-dialog";
+import WorkspacePicker from "./workspace-picker";
 
 interface BoardSidebarProps {
   boards: Board[];
@@ -112,9 +112,6 @@ export default function BoardSidebar({
                         </span>
                         <span className="flex-1 min-w-0 group-data-[collapsible=icon]:hidden">
                           <div className="font-medium truncate">{board.name}</div>
-                          <div className="text-xs text-muted-foreground truncate">
-                            {board.repo_path}
-                          </div>
                         </span>
                       </SidebarMenuButton>
                     </ContextMenuTrigger>
@@ -136,6 +133,7 @@ export default function BoardSidebar({
       </SidebarContent>
 
       <SidebarFooter>
+        <div className="border-t border-sidebar-border my-1 group-data-[collapsible=icon]:hidden" />
         <button
            onClick={() => setPickerOpen(true)}
            title="Add workspace"
@@ -146,7 +144,6 @@ export default function BoardSidebar({
             Add workspace
           </span>
         </button>
-        <div className="border-t border-sidebar-border my-1 group-data-[collapsible=icon]:hidden" />
         <button
            onClick={() => setSettingsOpen(true)}
            title="Settings"
@@ -159,13 +156,13 @@ export default function BoardSidebar({
         </button>
       </SidebarFooter>
 
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+
       <WorkspacePicker
         open={pickerOpen}
         onOpenChange={setPickerOpen}
         onSelect={onCreateBoard}
       />
-
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
 
       {/* Confirmation dialog */}
       {confirmRemove && ReactDOM.createPortal(
