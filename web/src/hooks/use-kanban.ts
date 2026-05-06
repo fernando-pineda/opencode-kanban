@@ -11,6 +11,7 @@ interface UseKanbanReturn {
   selectBoard: (board: Board) => void
   createBoard: (repoPath: string) => Promise<Board | null>
   removeBoard: (boardId: number) => Promise<void>
+  reorderBoards: (boardIds: number[]) => Promise<void>
   connectionStatus: ConnectionStatus
   isLoading: boolean
 }
@@ -84,6 +85,19 @@ export function useKanban(): UseKanbanReturn {
       await fetchBoards()
     } catch (err) {
       console.error('Failed to remove board:', err)
+    }
+  }, [fetchBoards])
+
+  const reorderBoards = useCallback(async (boardIds: number[]) => {
+    try {
+      await fetch(`${API_BASE}/api/boards/reorder`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ board_ids: boardIds }),
+      })
+      await fetchBoards()
+    } catch (err) {
+      console.error('Failed to reorder boards:', err)
     }
   }, [fetchBoards])
 
@@ -164,5 +178,5 @@ export function useKanban(): UseKanbanReturn {
     }
   }, [boards, activeBoard, isLoading, fetchBoardFull])
 
-  return { boards, activeBoard, selectBoard, createBoard, removeBoard, connectionStatus, isLoading }
+  return { boards, activeBoard, selectBoard, createBoard, removeBoard, reorderBoards, connectionStatus, isLoading }
 }

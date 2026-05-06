@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
-import { Bot, Cpu, Save, Loader2 } from "lucide-react";
+import ReactDOM from "react-dom";
+import { Bot, Cpu, Save, Loader2, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,72 +22,128 @@ interface AgentCardProps {
   fileExists: boolean;
   isDirty: boolean;
   isSaving: boolean;
+  canDelete: boolean;
+  isDeleting: boolean;
   onContentChange: (name: string, content: string) => void;
   onSave: (name: string) => void;
+  onDelete: (name: string) => void;
 }
 
-function AgentCard({ agent, content, fileExists, isDirty, isSaving, onContentChange, onSave }: AgentCardProps) {
+function AgentCard({ agent, content, fileExists, isDirty, isSaving, canDelete, isDeleting, onContentChange, onSave, onDelete }: AgentCardProps) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
   return (
-    <div className="rounded-lg border bg-card p-4 space-y-3">
-      {/* Header row */}
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="text-sm font-semibold capitalize">{agent.name}</span>
-          <Badge variant={agent.mode === "primary" ? "secondary" : "outline"}>
-            {agent.mode === "primary" ? "Primary" : "Subagent"}
-          </Badge>
-        </div>
-        <div className="flex items-center gap-1.5 shrink-0">
-          {agent.native ? (
-            <Badge variant="outline" className="text-[10px]">
-              Native
+    <>
+      <div className={`rounded-lg border bg-card p-4 space-y-3${confirmDelete ? " pointer-events-none" : ""}`}>
+        {/* Header row */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <span className="text-sm font-semibold capitalize">{agent.name}</span>
+            <Badge variant={agent.mode === "primary" ? "secondary" : "outline"}>
+              {agent.mode === "primary" ? "Primary" : "Subagent"}
             </Badge>
-          ) : agent.model ? (
-            <Badge variant="outline" className="text-[10px] font-mono">
-              <Cpu className="h-3 w-3 mr-1" />
-              {agent.model.modelID}
-            </Badge>
-          ) : null}
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {agent.native ? (
+              <Badge variant="outline" className="text-[10px]">
+                Native
+              </Badge>
+            ) : agent.model ? (
+              <Badge variant="outline" className="text-[10px] font-mono">
+                <Cpu className="h-3 w-3 mr-1" />
+                {agent.model.modelID}
+              </Badge>
+            ) : null}
+          </div>
         </div>
-      </div>
 
-      {/* Description */}
-      {agent.description && (
-        <p className="text-xs text-muted-foreground">{agent.description}</p>
-      )}
-
-      {/* Editor */}
-      {!fileExists && (
-        <p className="text-xs text-muted-foreground italic">
-          No agent file on disk. Editing will create a new file.
-        </p>
-      )}
-      <textarea
-        value={content}
-        onChange={(e) => onContentChange(agent.name, e.target.value)}
-        className="w-full min-h-[200px] max-h-[400px] text-xs font-mono bg-muted rounded-md p-3 border resize-y focus:ring-1 focus:ring-ring outline-none"
-        spellCheck={false}
-        placeholder={fileExists ? "" : "# Edit to create a new agent file..."}
-      />
-
-      {/* Action bar */}
-      <div className="flex items-center justify-between">
-        {isDirty && (
-          <span className="text-xs text-muted-foreground">Unsaved changes</span>
+        {/* Description */}
+        {agent.description && (
+          <p className="text-xs text-muted-foreground">{agent.description}</p>
         )}
-        <div className="ml-auto">
-          <Button size="sm" disabled={!isDirty || isSaving} onClick={() => onSave(agent.name)}>
-            {isSaving ? (
-              <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
-            ) : (
-              <Save className="h-3 w-3 mr-1.5" />
-            )}
-            Save
-          </Button>
+
+        {/* Editor */}
+        {!fileExists && (
+          <p className="text-xs text-muted-foreground italic">
+            No agent file on disk. Editing will create a new file.
+          </p>
+        )}
+        <textarea
+          value={content}
+          onChange={(e) => onContentChange(agent.name, e.target.value)}
+          className="w-full min-h-[200px] max-h-[400px] text-xs font-mono bg-muted rounded-md p-3 border resize-y focus:ring-1 focus:ring-ring outline-none"
+          spellCheck={false}
+          placeholder={fileExists ? "" : "# Edit to create a new agent file..."}
+        />
+
+        {/* Action bar */}
+        <div className="flex items-center justify-between">
+          {isDirty && (
+            <span className="text-xs text-muted-foreground">Unsaved changes</span>
+          )}
+          {!agent.native && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-destructive hover:text-destructive"
+              disabled={!canDelete || isDeleting}
+              onClick={() => setConfirmDelete(true)}
+            >
+              {isDeleting ? (
+                <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+              ) : (
+                <Trash2 className="h-3 w-3 mr-1.5" />
+              )}
+              Delete
+            </Button>
+          )}
+          <div className="ml-auto">
+            <Button size="sm" disabled={!isDirty || isSaving} onClick={() => onSave(agent.name)}>
+              {isSaving ? (
+                <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+              ) : (
+                <Save className="h-3 w-3 mr-1.5" />
+              )}
+              Save
+            </Button>
+          </div>
         </div>
       </div>
-    </div>
+
+      {/* Delete confirmation dialog */}
+      {confirmDelete &&
+        ReactDOM.createPortal(
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50">
+            <div className="bg-popover text-popover-foreground rounded-lg border p-4 shadow-lg max-w-sm mx-4 space-y-3">
+              <h3 className="font-semibold text-sm">Delete agent</h3>
+              <p className="text-sm text-muted-foreground">
+                Delete the <strong className="capitalize">{agent.name}</strong> agent? This will remove its configuration file. The agent may still appear if it's registered by opencode.
+              </p>
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setConfirmDelete(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => {
+                    setConfirmDelete(false);
+                    onDelete(agent.name);
+                  }}
+                >
+                  Delete
+                </Button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }
 
@@ -96,11 +153,13 @@ interface AgentsListProps {
   agentFileExists: Record<string, boolean>;
   dirtyFiles: Set<string>;
   saving: Record<string, boolean>;
+  deleting: Record<string, boolean>;
   onContentChange: (name: string, content: string) => void;
   onSave: (name: string) => void;
+  onDelete: (name: string) => void;
 }
 
-export function AgentsList({ agents, agentFiles, agentFileExists, dirtyFiles, saving, onContentChange, onSave }: AgentsListProps) {
+export function AgentsList({ agents, agentFiles, agentFileExists, dirtyFiles, saving, deleting, onContentChange, onSave, onDelete }: AgentsListProps) {
   if (agents.length === 0) {
     return (
       <div className="text-sm text-muted-foreground text-center py-8">
@@ -119,8 +178,11 @@ export function AgentsList({ agents, agentFiles, agentFileExists, dirtyFiles, sa
           fileExists={agentFileExists[agent.name] !== false}
           isDirty={dirtyFiles.has(agent.name)}
           isSaving={saving[agent.name] || false}
+          canDelete={agents.length > 1}
+          isDeleting={deleting[agent.name] || false}
           onContentChange={onContentChange}
           onSave={onSave}
+          onDelete={onDelete}
         />
       ))}
     </div>
@@ -135,6 +197,7 @@ export function useAgentsData() {
   const [agentFileExists, setAgentFileExists] = useState<Record<string, boolean>>({});
   const [dirtyFiles, setDirtyFiles] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState<Record<string, boolean>>({});
+  const [deleting, setDeleting] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -212,6 +275,39 @@ export function useAgentsData() {
     }
   }, [agentFiles]);
 
+  const handleDelete = useCallback(async (agentName: string) => {
+    setDeleting((prev) => ({ ...prev, [agentName]: true }));
+    try {
+      const res = await fetch(`/api/agents/${agentName}/file`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`Failed: ${res.status}`);
+      // Remove agent from local state
+      setAgents((prev) => prev.filter((a) => a.name !== agentName));
+      // Clean up file state
+      setAgentFiles((prev) => {
+        const next = { ...prev };
+        delete next[agentName];
+        return next;
+      });
+      setAgentFileExists((prev) => {
+        const next = { ...prev };
+        delete next[agentName];
+        return next;
+      });
+      setDirtyFiles((prev) => {
+        const next = new Set(prev);
+        next.delete(agentName);
+        return next;
+      });
+      toast.success(`Agent "${agentName}" deleted`);
+    } catch {
+      toast.error(`Failed to delete agent "${agentName}"`);
+    } finally {
+      setDeleting((prev) => ({ ...prev, [agentName]: false }));
+    }
+  }, []);
+
   const primaryAgents = agents.filter((a) => a.mode === "primary" && a.hidden !== true);
   const subagents = agents.filter((a) => a.mode === "subagent" && a.hidden !== true);
 
@@ -224,8 +320,10 @@ export function useAgentsData() {
     agentFileExists,
     dirtyFiles,
     saving,
+    deleting,
     handleContentChange,
     handleSave,
+    handleDelete,
   };
 }
 

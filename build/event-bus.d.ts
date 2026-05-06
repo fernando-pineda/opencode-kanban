@@ -11,6 +11,9 @@ export declare const EVENT_TYPES: {
     readonly SESSION_STARTED: "session_started";
     readonly SESSION_ENDED: "session_ended";
     readonly OPENCODE_SESSION_STATUS: "opencode_session_status";
+    readonly EPIC_UPDATED: "epic_updated";
+    readonly NOTIFICATION_CREATED: "notification_created";
+    readonly NOTIFICATION_SEEN: "notification_seen";
 };
 export type KanbanEvents = (typeof EVENT_TYPES)[keyof typeof EVENT_TYPES];
 export interface KanbanEventPayloads {
@@ -59,6 +62,21 @@ export interface KanbanEventPayloads {
         status: {
             type: string;
         };
+    };
+    epic_updated: {
+        epic_id: number;
+        board_id: number;
+        status: string;
+    };
+    notification_created: {
+        notification_id: number;
+        board_id: number;
+        session_id: string;
+        type: string;
+    };
+    notification_seen: {
+        notification_id: number;
+        board_id: number;
     };
 }
 declare class KanbanEventBus extends EventEmitter {

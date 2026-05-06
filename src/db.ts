@@ -14,6 +14,9 @@ import type {
   BoardFull,
   Rule,
   Setting,
+  Epic,
+  EpicSession,
+  Notification,
 } from "./types.js";
 import { emitBoardChange } from "./event-bus.js";
 
@@ -42,8 +45,68 @@ function initDb(): Database.Database {
   return database;
 }
 
+function migrateAddReadyStatus(): void {
+  try {
+    // Check if 'ready' is already in the constraint
+    const epicCheck = db
+      .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='kanban_epics'")
+      .get() as { sql: string } | undefined;
+
+    if (epicCheck?.sql && !epicCheck.sql.includes("'ready'")) {
+      console.error("[kanban-db] Migrating kanban_epics: adding 'ready' status...");
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS kanban_epics_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          board_id INTEGER NOT NULL REFERENCES kanban_boards(id) ON DELETE CASCADE,
+          task_key TEXT NOT NULL,
+          title TEXT NOT NULL DEFAULT '',
+          description TEXT NOT NULL DEFAULT '',
+          plan_text TEXT DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'planning'
+            CHECK(status IN ('planning', 'ready', 'spawning', 'running', 'completed', 'failed')),
+          planner_session_id TEXT,
+          column_name TEXT NOT NULL DEFAULT 'Backlog',
+          created_at TEXT DEFAULT (datetime('now')),
+          updated_at TEXT DEFAULT (datetime('now')),
+          UNIQUE(board_id, task_key)
+        );
+        INSERT INTO kanban_epics_new SELECT * FROM kanban_epics;
+        DROP TABLE kanban_epics;
+        ALTER TABLE kanban_epics_new RENAME TO kanban_epics;
+      `);
+      console.error("[kanban-db] Migration complete: 'ready' status added.");
+    }
+  } catch (err) {
+    console.error("[kanban-db] Migration error (non-fatal):", err);
+  }
+}
+
+function migrateAddBoardPosition(): void {
+  try {
+    // Check if 'position' column exists on kanban_boards
+    const tableInfo = db
+      .prepare("PRAGMA table_info(kanban_boards)")
+      .all() as Array<{ name: string }>;
+
+    const hasPosition = tableInfo.some((col) => col.name === "position");
+    if (!hasPosition) {
+      console.error("[kanban-db] Migrating kanban_boards: adding position column...");
+      db.exec(
+        "ALTER TABLE kanban_boards ADD COLUMN position INTEGER NOT NULL DEFAULT 0",
+      );
+      // Assign initial positions to existing boards
+      db.prepare("UPDATE kanban_boards SET position = id WHERE position = 0").run();
+      console.error("[kanban-db] Migration complete: position column added.");
+    }
+  } catch (err) {
+    console.error("[kanban-db] Migration error (non-fatal):", err);
+  }
+}
+
 try {
   db = initDb();
+  migrateAddReadyStatus();
+  migrateAddBoardPosition();
   console.error(`[kanban-db] Connected to opencode.db: ${OPENCODE_DB_PATH}`);
 } catch (err) {
   console.error(`[kanban-db] Failed to initialize:`, err);
@@ -175,11 +238,19 @@ export function getOrCreateBoard(repoPath: string): Board {
 
   const name = basename(repoPath);
   const now = new Date().toISOString();
+
+  // Get max position for active boards to insert at the end
+  const maxPos = db
+    .prepare(
+      "SELECT COALESCE(MAX(position), -1) + 1 as pos FROM kanban_boards WHERE status = 'active'",
+    )
+    .get() as { pos: number };
+
   const board = db
     .prepare(
-      "INSERT INTO kanban_boards (name, repo_path, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+      "INSERT INTO kanban_boards (name, repo_path, status, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
     )
-    .run(name, repoPath, "active", now, now);
+    .run(name, repoPath, "active", maxPos.pos, now, now);
 
   const boardId = Number(board.lastInsertRowid);
   const defaultColumns = ["Backlog", "In Progress", "Done", "Archived"];
@@ -196,6 +267,7 @@ export function getOrCreateBoard(repoPath: string): Board {
     name,
     repo_path: repoPath,
     status: "active",
+    position: maxPos.pos,
     created_at: now,
     updated_at: now,
   };
@@ -239,13 +311,13 @@ export function listBoards(repoPath?: string): Board[] {
   if (repoPath) {
     return db
       .prepare(
-        "SELECT * FROM kanban_boards WHERE repo_path = ? AND status = ? ORDER BY updated_at DESC",
+        "SELECT * FROM kanban_boards WHERE repo_path = ? AND status = ? ORDER BY position ASC, updated_at DESC",
       )
       .all(repoPath, "active") as Board[];
   }
   return db
     .prepare(
-      "SELECT * FROM kanban_boards WHERE status = ? ORDER BY updated_at DESC",
+      "SELECT * FROM kanban_boards WHERE status = ? ORDER BY position ASC, updated_at DESC",
     )
     .all("active") as Board[];
 }
@@ -255,6 +327,17 @@ export function archiveBoard(boardId: number): void {
     "UPDATE kanban_boards SET status = 'archived', updated_at = ? WHERE id = ?",
   ).run(new Date().toISOString(), boardId);
   emitBoardChange("board_updated", { board_id: boardId });
+}
+
+export function reorderBoards(boardIds: number[]): void {
+  const update = db.prepare("UPDATE kanban_boards SET position = ? WHERE id = ?");
+  const transaction = db.transaction(() => {
+    for (let i = 0; i < boardIds.length; i++) {
+      update.run(i, boardIds[i]);
+    }
+  });
+  transaction();
+  emitBoardChange("board_updated", { board_id: 0 });
 }
 
 // ── Column functions ────────────────────────────────────────
@@ -584,6 +667,27 @@ export function getBoardFull(boardId: number): BoardFull {
     )
     .all() as any[];
 
+  // Get epic associations for all sessions
+  const sessionIds = sessions.map((s: any) => s.id);
+  const epicMap = new Map<string, string>();
+  if (sessionIds.length > 0) {
+    const placeholders = sessionIds.map(() => '?').join(',');
+    // Check spawned sessions
+    const epicRows = db.prepare(
+      `SELECT es.session_id, e.task_key FROM kanban_epic_sessions es JOIN kanban_epics e ON e.id = es.epic_id WHERE es.session_id IN (${placeholders})`
+    ).all(...sessionIds) as { session_id: string; task_key: string }[];
+    for (const row of epicRows) {
+      epicMap.set(row.session_id, row.task_key);
+    }
+    // Check planner sessions
+    const plannerRows = db.prepare(
+      `SELECT planner_session_id, task_key FROM kanban_epics WHERE planner_session_id IN (${placeholders})`
+    ).all(...sessionIds) as { planner_session_id: string; task_key: string }[];
+    for (const row of plannerRows) {
+      epicMap.set(row.planner_session_id, row.task_key);
+    }
+  }
+
   const nowMs = Date.now();
   const cards: Card[] = [];
 
@@ -617,6 +721,7 @@ export function getBoardFull(boardId: number): BoardFull {
       column_name: columnName,
       subtasks: [],
       agent_logs: [],
+      epic_task_key: epicMap.get(session.id),
     });
   }
 
@@ -626,7 +731,13 @@ export function getBoardFull(boardId: number): BoardFull {
     card.agent_logs = getAgentLogs(card.session_id);
   }
 
-  return { board, columns, cards };
+  // Fetch epics for the board
+  const epics = getEpicsByBoard(boardId);
+  for (const epic of epics) {
+    epic.sessions = getEpicSessions(epic.id);
+  }
+
+  return { board, columns, cards, epics };
 }
 
 // ── Session messages functions ──────────────────────────────────────────────
@@ -926,6 +1037,18 @@ export function getActiveSessionIds(): Array<{ id: string; directory: string }> 
     .all(oneDayAgoMs) as Array<{ id: string; directory: string }>;
 }
 
+export function setSessionCompacting(sessionId: string, compacting: boolean): void {
+  const value = compacting ? Date.now() : null;
+  db.prepare("UPDATE session SET time_compacting = ? WHERE id = ?").run(value, sessionId);
+}
+
+export function isSessionCompacting(sessionId: string): boolean {
+  const row = db
+    .prepare("SELECT time_compacting FROM session WHERE id = ?")
+    .get(sessionId) as { time_compacting: number | null } | undefined;
+  return !!(row && row.time_compacting && row.time_compacting > 0);
+}
+
 // ── Utility ────────────────────────────────────────────────
 
 export function getDistinctRepos(): string[] {
@@ -944,6 +1067,384 @@ export function deleteSession(sessionId: string): void {
   db.prepare("DELETE FROM kanban_subtasks WHERE session_id = ?").run(sessionId);
   db.prepare("DELETE FROM kanban_agent_logs WHERE session_id = ?").run(sessionId);
   emitBoardChange("card_deleted", { session_id: sessionId });
+}
+
+// ── Epic functions ─────────────────────────────────────────
+
+export function deriveTaskKeyPrefix(boardName: string): string {
+  const parts = boardName
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .split(/[-_\s]+/)
+    .filter(Boolean);
+
+  if (parts.length === 1) {
+    return parts[0].substring(0, 2).toUpperCase();
+  }
+  return parts.map(p => p[0]).join('').toUpperCase().substring(0, 3);
+}
+
+export function getNextTaskKey(boardId: number): string {
+  const board = getBoard(boardId);
+  if (!board) throw new Error(`Board ${boardId} not found`);
+
+  const prefix = deriveTaskKeyPrefix(board.name);
+
+  // Atomic increment: INSERT if not exists, then UPDATE
+  db.prepare(
+    "INSERT OR IGNORE INTO kanban_task_key_counters (board_id, next_number) VALUES (?, 1)"
+  ).run(boardId);
+
+  const row = db
+    .prepare("SELECT next_number FROM kanban_task_key_counters WHERE board_id = ?")
+    .get(boardId) as { next_number: number } | undefined;
+
+  const num = row?.next_number || 1;
+
+  db.prepare(
+    "UPDATE kanban_task_key_counters SET next_number = ? WHERE board_id = ?"
+  ).run(num + 1, boardId);
+
+  return `${prefix}-${num}`;
+}
+
+export function createEpic(
+  boardId: number,
+  title: string,
+  description: string,
+  plannerSessionId: string | null,
+): Epic {
+  const taskKey = getNextTaskKey(boardId);
+  const now = new Date().toISOString();
+  const result = db
+    .prepare(
+      "INSERT INTO kanban_epics (board_id, task_key, title, description, status, planner_session_id, column_name, created_at, updated_at) VALUES (?, ?, ?, ?, 'planning', ?, 'Backlog', ?, ?)"
+    )
+    .run(boardId, taskKey, title, description, plannerSessionId, now, now);
+
+  const epicId = Number(result.lastInsertRowid);
+  const epic: Epic = {
+    id: epicId,
+    board_id: boardId,
+    task_key: taskKey,
+    title,
+    description,
+    plan_text: '',
+    status: 'planning',
+    planner_session_id: plannerSessionId,
+    column_name: 'Backlog',
+    created_at: now,
+    updated_at: now,
+  };
+
+  emitBoardChange("epic_updated" as any, { epic_id: epicId, board_id: boardId, status: 'planning' });
+  return epic;
+}
+
+export function updateEpic(
+  epicId: number,
+  data: {
+    status?: string;
+    plan_text?: string;
+    column_name?: string;
+    title?: string;
+    description?: string;
+    planner_session_id?: string | null;
+  },
+): Epic | null {
+  const epic = db
+    .prepare("SELECT * FROM kanban_epics WHERE id = ?")
+    .get(epicId) as Epic | undefined;
+  if (!epic) return null;
+
+  const sets: string[] = [];
+  const values: any[] = [];
+
+  if (data.status !== undefined) { sets.push("status = ?"); values.push(data.status); }
+  if (data.plan_text !== undefined) { sets.push("plan_text = ?"); values.push(data.plan_text); }
+  if (data.column_name !== undefined) { sets.push("column_name = ?"); values.push(data.column_name); }
+  if (data.title !== undefined) { sets.push("title = ?"); values.push(data.title); }
+  if (data.description !== undefined) { sets.push("description = ?"); values.push(data.description); }
+  if (data.planner_session_id !== undefined) { sets.push("planner_session_id = ?"); values.push(data.planner_session_id); }
+
+  if (sets.length === 0) return epic;
+
+  sets.push("updated_at = ?");
+  values.push(new Date().toISOString());
+  values.push(epicId);
+
+  db.prepare(`UPDATE kanban_epics SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+
+  const updated = (db.prepare("SELECT * FROM kanban_epics WHERE id = ?").get(epicId) as Epic | undefined) || null;
+  if (updated) {
+    emitBoardChange("epic_updated" as any, { epic_id: updated.id, board_id: updated.board_id, status: updated.status });
+  }
+  return updated;
+}
+
+export function getEpic(epicId: number): Epic | null {
+  return (db.prepare("SELECT * FROM kanban_epics WHERE id = ?").get(epicId) as Epic | undefined) || null;
+}
+
+export function getEpicsByBoard(boardId: number): Epic[] {
+  return db
+    .prepare("SELECT * FROM kanban_epics WHERE board_id = ? ORDER BY created_at ASC")
+    .all(boardId) as Epic[];
+}
+
+export function deleteEpic(epicId: number): void {
+  const epic = getEpic(epicId);
+  if (!epic) return;
+
+  // Get child session IDs before deleting
+  const sessions = getEpicSessions(epicId);
+  const childSessionIds = sessions.map(s => s.session_id);
+
+  // Delete epic sessions first (FK cascade should handle this, but be explicit)
+  db.prepare("DELETE FROM kanban_epic_sessions WHERE epic_id = ?").run(epicId);
+  // Delete the epic
+  db.prepare("DELETE FROM kanban_epics WHERE id = ?").run(epicId);
+
+  // Clean up kanban tracking for child sessions
+  for (const sid of childSessionIds) {
+    db.prepare("INSERT OR IGNORE INTO kanban_deleted_sessions (session_id) VALUES (?)").run(sid);
+    db.prepare("DELETE FROM kanban_completed WHERE session_id = ?").run(sid);
+    db.prepare("DELETE FROM kanban_session_columns WHERE session_id = ?").run(sid);
+  }
+
+  // Also clean up planner session
+  if (epic.planner_session_id) {
+    db.prepare("INSERT OR IGNORE INTO kanban_deleted_sessions (session_id) VALUES (?)").run(epic.planner_session_id);
+    db.prepare("DELETE FROM kanban_completed WHERE session_id = ?").run(epic.planner_session_id);
+    db.prepare("DELETE FROM kanban_session_columns WHERE session_id = ?").run(epic.planner_session_id);
+  }
+
+  emitBoardChange("epic_updated" as any, { epic_id: epicId, board_id: epic.board_id, status: 'deleted' });
+}
+
+export function addEpicSession(
+  epicId: number,
+  sessionId: string,
+  taskKey: string,
+  subtaskIndex: number,
+  title: string,
+  description: string,
+): EpicSession {
+  const result = db
+    .prepare(
+      "INSERT INTO kanban_epic_sessions (epic_id, session_id, task_key, subtask_index, title, description) VALUES (?, ?, ?, ?, ?, ?)"
+    )
+    .run(epicId, sessionId, taskKey, subtaskIndex, title, description);
+
+  const epicSessionId = Number(result.lastInsertRowid);
+  const epicSession: EpicSession = {
+    id: epicSessionId,
+    epic_id: epicId,
+    session_id: sessionId,
+    task_key: taskKey,
+    subtask_index: subtaskIndex,
+    title,
+    description,
+  };
+
+  const epic = getEpic(epicId);
+  if (epic) {
+    emitBoardChange("epic_updated" as any, { epic_id: epicId, board_id: epic.board_id, status: epic.status });
+  }
+  return epicSession;
+}
+
+export function getEpicSessions(epicId: number): EpicSession[] {
+  return db
+    .prepare("SELECT * FROM kanban_epic_sessions WHERE epic_id = ? ORDER BY subtask_index ASC")
+    .all(epicId) as EpicSession[];
+}
+
+export function getEpicForSession(sessionId: string): Epic | null {
+  const row = db
+    .prepare("SELECT epic_id FROM kanban_epic_sessions WHERE session_id = ?")
+    .get(sessionId) as { epic_id: number } | undefined;
+  if (!row) return null;
+  return getEpic(row.epic_id);
+}
+
+export function updateEpicStatus(epicId: number): void {
+  const epic = getEpic(epicId);
+  if (!epic) return;
+
+  const sessions = getEpicSessions(epicId);
+  if (sessions.length === 0) return;
+
+  // Get completed set to check if child sessions are done
+  const completedSet = new Set(
+    (db.prepare("SELECT session_id FROM kanban_completed").all() as { session_id: string }[])
+      .map(r => r.session_id)
+  );
+
+  const allCompleted = sessions.every(s => completedSet.has(s.session_id));
+  const anyFailed = sessions.some(s => {
+    // Check if session is in a failed state — we consider it failed if it was deleted or if status indicates failure
+    // For now, we check if it's completed (not failed). Real failure detection would need opencode status.
+    return false; // Will be enhanced with opencode status checks
+  });
+
+  let newStatus: string = epic.status;
+  let newColumn: string = epic.column_name;
+
+  if (allCompleted) {
+    newStatus = 'completed';
+    newColumn = 'Done';
+  }
+
+  if (newStatus !== epic.status || newColumn !== epic.column_name) {
+    updateEpic(epicId, { status: newStatus, column_name: newColumn });
+  }
+}
+
+// ── Memory settings helpers ──────────────────────────────────
+
+export function isMemoriesEnabled(): boolean {
+  const val = getSetting("memories_enabled");
+  if (val === null) return true; // default: enabled
+  return val === "true" || val === "1";
+}
+
+export function getAutoPruneDays(): number {
+  const val = getSetting("memories_auto_prune_days");
+  if (val === null) return 90; // default: 90 days
+  const num = parseInt(val, 10);
+  return isNaN(num) ? 90 : Math.max(1, Math.min(365, num));
+}
+
+export function isKeepImportant(): boolean {
+  const val = getSetting("memories_keep_important");
+  if (val === null) return true; // default: keep important
+  return val === "true" || val === "1";
+}
+
+// ── Notification functions ───────────────────────────────────
+
+export function createNotification(
+  boardId: number,
+  sessionId: string,
+  type: string,
+  title: string = "",
+): Notification | null {
+  const now = new Date().toISOString();
+  // Use INSERT OR IGNORE with a composite uniqueness check to avoid duplicates
+  // for the same session+type while unseen
+  const result = db
+    .prepare(
+      `INSERT OR IGNORE INTO kanban_notifications (board_id, session_id, type, title, seen, created_at, updated_at)
+       SELECT ?, ?, ?, ?, 0, ?, ?
+       WHERE NOT EXISTS (
+         SELECT 1 FROM kanban_notifications
+         WHERE session_id = ? AND type = ? AND seen = 0
+       )`,
+    )
+    .run(boardId, sessionId, type, title, now, now, sessionId, type);
+
+  if (result.changes === 0) return null; // duplicate skipped
+
+  const notificationId = Number(result.lastInsertRowid);
+  emitBoardChange("notification_created" as any, {
+    notification_id: notificationId,
+    board_id: boardId,
+    session_id: sessionId,
+    type,
+  });
+
+  return (
+    (db
+      .prepare("SELECT * FROM kanban_notifications WHERE id = ?")
+      .get(notificationId) as Notification | undefined) || null
+  );
+}
+
+export function getNotifications(boardId: number): Notification[] {
+  return db
+    .prepare(
+      "SELECT * FROM kanban_notifications WHERE board_id = ? ORDER BY created_at DESC",
+    )
+    .all(boardId) as Notification[];
+}
+
+export function getUnseenNotificationCount(boardId: number): number {
+  const row = db
+    .prepare(
+      "SELECT COUNT(*) as count FROM kanban_notifications WHERE board_id = ? AND seen = 0",
+    )
+    .get(boardId) as { count: number };
+  return row.count;
+}
+
+export function getAllUnseenCounts(): Record<number, number> {
+  const rows = db
+    .prepare(
+      "SELECT board_id, COUNT(*) as count FROM kanban_notifications WHERE seen = 0 GROUP BY board_id",
+    )
+    .all() as Array<{ board_id: number; count: number }>;
+  const result: Record<number, number> = {};
+  for (const row of rows) {
+    result[row.board_id] = row.count;
+  }
+  return result;
+}
+
+export function markNotificationSeen(notificationId: number): boolean {
+  const notification = db
+    .prepare("SELECT * FROM kanban_notifications WHERE id = ?")
+    .get(notificationId) as Notification | undefined;
+  if (!notification) return false;
+
+  const now = new Date().toISOString();
+  db.prepare(
+    "UPDATE kanban_notifications SET seen = 1, updated_at = ? WHERE id = ?",
+  ).run(now, notificationId);
+
+  emitBoardChange("notification_seen" as any, {
+    notification_id: notificationId,
+    board_id: notification.board_id,
+  });
+  return true;
+}
+
+export function markAllNotificationsSeen(boardId: number): number {
+  const now = new Date().toISOString();
+  const result = db
+    .prepare(
+      "UPDATE kanban_notifications SET seen = 1, updated_at = ? WHERE board_id = ? AND seen = 0",
+    )
+    .run(now, boardId);
+  return result.changes;
+}
+
+export function markSessionNotificationsSeen(sessionId: string): number {
+  const now = new Date().toISOString();
+  const result = db
+    .prepare(
+      "UPDATE kanban_notifications SET seen = 1, updated_at = ? WHERE session_id = ? AND seen = 0",
+    )
+    .run(now, sessionId);
+  return result.changes;
+}
+
+export function getNotificationBoardForSession(sessionId: string): number | null {
+  // Find which board a session belongs to by matching session directory to board repo_path
+  try {
+    const session = db
+      .prepare("SELECT directory FROM session WHERE id = ?")
+      .get(sessionId) as { directory: string } | undefined;
+    if (!session) return null;
+
+    const board = db
+      .prepare(
+        "SELECT id FROM kanban_boards WHERE repo_path = ? AND status = 'active'",
+      )
+      .get(session.directory) as { id: number } | undefined;
+    return board?.id || null;
+  } catch {
+    return null;
+  }
 }
 
 export function closeDb(): void {

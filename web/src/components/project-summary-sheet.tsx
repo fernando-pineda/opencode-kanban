@@ -12,6 +12,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Loader2, RefreshCw, AlertCircle } from 'lucide-react'
+import { toast } from 'sonner'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
@@ -21,6 +22,7 @@ interface ProjectSummarySheetProps {
   directory: string
   open: boolean
   onOpenChange: (open: boolean) => void
+  onGeneratingChange?: (generating: boolean) => void
 }
 
 type SummaryState = 'idle' | 'loading' | 'streaming' | 'complete' | 'error'
@@ -29,6 +31,7 @@ export default function ProjectSummarySheet({
   directory,
   open,
   onOpenChange,
+  onGeneratingChange,
 }: ProjectSummarySheetProps) {
   const [state, setState] = useState<SummaryState>('idle')
   const [summaryText, setSummaryText] = useState<string | null>(null)
@@ -39,12 +42,15 @@ export default function ProjectSummarySheet({
   const MAX_POLLS = 120 // 120 * 2s = 240s max wait
   const mountedRef = useRef(true)
 
-  const cleanup = useCallback(async () => {
-    // Stop polling
+  const stopPolling = useCallback(() => {
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current)
       pollIntervalRef.current = null
     }
+  }, [])
+
+  const cleanup = useCallback(async () => {
+    stopPolling()
     // Delete ephemeral session
     const sid = sessionIdRef.current
     if (sid) {
@@ -55,13 +61,60 @@ export default function ProjectSummarySheet({
         // non-critical
       }
     }
-  }, [])
+  }, [stopPolling])
+
+  const startPolling = useCallback(() => {
+    if (pollIntervalRef.current) return // already polling
+    pollCountRef.current = 0
+
+    pollIntervalRef.current = setInterval(async () => {
+      pollCountRef.current++
+      if (pollCountRef.current > MAX_POLLS) {
+        stopPolling()
+        setState('error')
+        setError('Generation timed out. Try refreshing.')
+        onGeneratingChange?.(false)
+        return
+      }
+
+      const sid = sessionIdRef.current
+      if (!sid) return
+
+      try {
+        const msgRes = await fetch(`/api/sessions/${sid}/messages?limit=50&offset=0`)
+        if (!msgRes.ok) return
+        const msgData = await msgRes.json()
+
+        const assistantMessages = (msgData.messages || []).filter(
+          (m: any) => m.role === 'assistant' && m.text
+        )
+
+        if (assistantMessages.length > 0) {
+          const text = assistantMessages.map((m: any) => m.text).join('\n\n')
+          setSummaryText(text)
+          setState('complete')
+          onGeneratingChange?.(false)
+          stopPolling()
+        }
+      } catch {
+        // ignore poll errors
+      }
+    }, 2000)
+  }, [MAX_POLLS, stopPolling, onGeneratingChange])
 
   const startGeneration = useCallback(async () => {
+    // If we already have a session, just resume polling
+    if (sessionIdRef.current) {
+      setState('streaming')
+      onGeneratingChange?.(true)
+      startPolling()
+      return
+    }
+
     setState('loading')
     setError(null)
     setSummaryText(null)
-    pollCountRef.current = 0
+    onGeneratingChange?.(true)
 
     try {
       const res = await fetch('/api/project-summary', {
@@ -76,54 +129,30 @@ export default function ProjectSummarySheet({
       const data = await res.json()
       sessionIdRef.current = data.session_id
 
+      toast.info('Agent dispatched — generating project summary…')
+
       // Start polling for messages
       setState('streaming')
-      pollIntervalRef.current = setInterval(async () => {
-        pollCountRef.current++
-        if (pollCountRef.current > MAX_POLLS) {
-          cleanup()
-          setState('error')
-          setError('Generation timed out. Try refreshing.')
-          return
-        }
-
-        const sid = sessionIdRef.current
-        if (!sid) return
-
-        try {
-          const msgRes = await fetch(`/api/sessions/${sid}/messages?limit=50&offset=0`)
-          if (!msgRes.ok) return
-          const msgData = await msgRes.json()
-
-          // Find assistant messages
-          const assistantMessages = (msgData.messages || []).filter(
-            (m: any) => m.role === 'assistant' && m.text
-          )
-
-          if (assistantMessages.length > 0) {
-            // Combine all assistant message text
-            const text = assistantMessages.map((m: any) => m.text).join('\n\n')
-            setSummaryText(text)
-
-            // Check if agent is done — if total hasn't changed for a few polls, mark complete
-            // Simple heuristic: if we have assistant text and the session isn't busy, we're done
-            // For now, just keep updating — the user can read as it streams
-          }
-        } catch {
-          // ignore poll errors
-        }
-      }, 2000)
+      startPolling()
     } catch (err) {
       setState('error')
       setError(err instanceof Error ? err.message : 'Failed to generate summary')
+      onGeneratingChange?.(false)
     }
-  }, [directory, cleanup])
+  }, [directory, startPolling, onGeneratingChange])
 
   // Auto-start when sheet opens
   useEffect(() => {
     mountedRef.current = true
-    if (open && !summaryText && state === 'idle') {
-      startGeneration()
+    if (open) {
+      if (summaryText && state === 'complete') {
+        // Already have a cached summary, just show it
+      } else if (state === 'idle') {
+        startGeneration()
+      } else if (sessionIdRef.current && (state === 'streaming' || state === 'loading')) {
+        // Resume polling for an in-progress generation
+        startPolling()
+      }
     }
     return () => {
       mountedRef.current = false
@@ -131,29 +160,22 @@ export default function ProjectSummarySheet({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
-  // Cleanup on close or unmount
+  // Stop polling on close, but keep session alive for re-open
   useEffect(() => {
     if (!open) {
-      cleanup()
-      // Don't reset summaryText on close — keep cache
-      // Don't reset state — keep 'complete' or 'error' state
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current)
-        pollIntervalRef.current = null
-      }
+      stopPolling()
     }
     return () => {
       cleanup()
     }
-  }, [open, cleanup])
+  }, [open, stopPolling, cleanup])
 
-  const handleRefresh = () => {
-    cleanup()
+  const handleRefresh = async () => {
+    await cleanup()
     setSummaryText(null)
     setState('idle')
     setError(null)
-    // Will auto-start via the useEffect
-    setTimeout(() => startGeneration(), 100)
+    startGeneration()
   }
 
   const isLoading = state === 'loading' || state === 'streaming'

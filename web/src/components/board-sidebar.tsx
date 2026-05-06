@@ -1,7 +1,24 @@
 "use client";
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import ReactDOM from "react-dom";
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import {
   Sidebar,
   SidebarContent,
@@ -29,6 +46,7 @@ import {
 } from "@/components/ui/context-menu";
 import { Board } from "../types";
 import { Trash2, Settings, Plus } from "lucide-react";
+import { useNotifications } from "../hooks/use-notifications";
 import SettingsDialog from "./settings-dialog";
 import WorkspacePicker from "./workspace-picker";
 
@@ -38,6 +56,7 @@ interface BoardSidebarProps {
   onSelectBoard: (board: Board) => void;
   onCreateBoard: (repoPath: string) => Promise<Board | null>;
   onRemoveBoard: (boardId: number) => Promise<void>;
+  onReorderBoards: (boardIds: number[]) => Promise<void>;
   connectionStatus: "connected" | "connecting" | "disconnected";
 }
 
@@ -47,17 +66,121 @@ const statusColors: Record<string, string> = {
   disconnected: "bg-destructive",
 };
 
+function SortableBoardItem({
+  board,
+  isActive,
+  unseenCount,
+  onClick,
+  onRemove,
+}: {
+  board: Board;
+  isActive: boolean;
+  unseenCount: number;
+  onClick: () => void;
+  onRemove: () => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: board.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <SidebarMenuItem ref={setNodeRef} style={style}>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <SidebarMenuButton
+            isActive={isActive}
+            onClick={onClick}
+            className="cursor-pointer group-data-[collapsible=icon]:data-[active=true]:bg-transparent"
+            tooltip={board.name}
+          >
+            <span
+              className="relative flex items-center justify-center w-5 h-5 rounded bg-foreground text-background text-xs font-bold flex-shrink-0 cursor-grab active:cursor-grabbing"
+              {...attributes}
+              {...listeners}
+            >
+              {board.name.charAt(0).toUpperCase()}
+              {unseenCount > 0 && !isActive && (
+                <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-red-500 flex items-center justify-center text-white text-[7px] font-bold leading-none">
+                  {unseenCount >= 10 ? "9" : unseenCount}
+                </span>
+              )}
+            </span>
+            <span className="flex-1 min-w-0 group-data-[collapsible=icon]:hidden">
+              <div className="font-medium truncate flex items-center gap-2">
+                <span className="truncate">{board.name}</span>
+                {unseenCount > 0 && !isActive && (
+                  <span className="ml-auto flex-shrink-0 flex items-center justify-center min-w-[18px] h-[18px] rounded-full bg-red-500 text-white text-[10px] font-bold px-1">
+                    {unseenCount >= 10 ? "9+" : unseenCount}
+                  </span>
+                )}
+              </div>
+            </span>
+          </SidebarMenuButton>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem variant="destructive" onClick={onRemove}>
+            <Trash2 className="h-4 w-4" />
+            Remove workspace
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+    </SidebarMenuItem>
+  );
+}
+
 export default function BoardSidebar({
   boards,
   activeBoard,
   onSelectBoard,
   onCreateBoard,
   onRemoveBoard,
+  onReorderBoards,
   connectionStatus,
 }: BoardSidebarProps) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState<Board | null>(null);
+  const [localBoards, setLocalBoards] = useState(boards);
+  const { unseenCounts, markAllSeen } = useNotifications();
+
+  // Sync local boards when prop changes
+  useEffect(() => {
+    setLocalBoards(boards);
+  }, [boards]);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 5 },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+
+      const oldIndex = localBoards.findIndex((b) => b.id === active.id);
+      const newIndex = localBoards.findIndex((b) => b.id === over.id);
+      const reordered = arrayMove(localBoards, oldIndex, newIndex);
+      setLocalBoards(reordered);
+      onReorderBoards(reordered.map((b) => b.id));
+    },
+    [localBoards, onReorderBoards]
+  );
 
   const handleConfirmRemove = useCallback(async () => {
     if (confirmRemove) {
@@ -65,6 +188,7 @@ export default function BoardSidebar({
       setConfirmRemove(null);
     }
   }, [confirmRemove, onRemoveBoard]);
+
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader>
@@ -96,38 +220,33 @@ export default function BoardSidebar({
             Boards
           </SidebarGroupLabel>
           <SidebarGroupContent>
-            <SidebarMenu>
-              {boards.map((board) => (
-                <SidebarMenuItem key={board.id}>
-                  <ContextMenu>
-                    <ContextMenuTrigger asChild>
-                      <SidebarMenuButton
-                        isActive={activeBoard?.id === board.id}
-                        onClick={() => onSelectBoard(board)}
-                        className="cursor-pointer group-data-[collapsible=icon]:data-[active=true]:bg-transparent"
-                        tooltip={board.name}
-                      >
-                        <span className="flex items-center justify-center w-5 h-5 rounded bg-foreground text-background text-xs font-bold flex-shrink-0">
-                          {board.name.charAt(0).toUpperCase()}
-                        </span>
-                        <span className="flex-1 min-w-0 group-data-[collapsible=icon]:hidden">
-                          <div className="font-medium truncate">{board.name}</div>
-                        </span>
-                      </SidebarMenuButton>
-                    </ContextMenuTrigger>
-                    <ContextMenuContent>
-                      <ContextMenuItem
-                        variant="destructive"
-                        onClick={() => setConfirmRemove(board)}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                        Remove workspace
-                      </ContextMenuItem>
-                    </ContextMenuContent>
-                  </ContextMenu>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext
+                items={localBoards.map((b) => b.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                <SidebarMenu>
+                  {localBoards.map((board) => (
+                    <SortableBoardItem
+                      key={board.id}
+                      board={board}
+                      isActive={activeBoard?.id === board.id}
+                      unseenCount={unseenCounts[board.id] || 0}
+                      onClick={() => {
+                        onSelectBoard(board);
+                        const count = unseenCounts[board.id] || 0;
+                        if (count > 0) markAllSeen(board.id);
+                      }}
+                      onRemove={() => setConfirmRemove(board)}
+                    />
+                  ))}
+                </SidebarMenu>
+              </SortableContext>
+            </DndContext>
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>

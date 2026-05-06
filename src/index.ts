@@ -11,6 +11,7 @@ import {
   getBoard,
   listBoards,
   archiveBoard,
+  reorderBoards,
   moveSessionToColumn,
   searchCards,
   createSubtask,
@@ -24,6 +25,27 @@ import {
   markSessionCompleted,
   unmarkSessionCompleted,
 } from "./db.js";
+import {
+  saveMemory,
+  searchMemories,
+  searchMemoriesByVector,
+  getMemories,
+  updateMemory,
+  compactConversationMemories,
+  pruneMemories,
+  getRepos,
+  saveKnowledge,
+  batchSaveKnowledge,
+  searchKnowledge,
+  getKnowledge,
+  listKnowledge,
+  getKnowledgeStats,
+  getStaleKnowledge,
+  deleteKnowledge,
+} from "./memories.js";
+import type { MemoryType, KnowledgeCategory } from "./types.js";
+
+const VALID_CATEGORIES: KnowledgeCategory[] = ['file', 'command', 'architecture', 'api', 'config', 'schema', 'workflow', 'gotcha'];
 
 const server = new Server(
   { name: "opencode-kanban", version: "1.0.0" },
@@ -73,6 +95,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           repo_path: { type: "string", description: "Repository path" },
         },
         required: ["repo_path"],
+      },
+    },
+    {
+      name: "kanban_reorder_boards",
+      description: "Reorder boards in the sidebar by position.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          board_ids: {
+            type: "array",
+            items: { type: "number" },
+            description: "Array of board IDs in the desired order",
+          },
+        },
+        required: ["board_ids"],
       },
     },
 
@@ -217,6 +254,253 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {},
       },
     },
+
+    // ── Memory tools ────────────────────────────────────────
+    {
+      name: "memory_save",
+      description:
+        "Save a conversation memory — decisions, findings, patterns, errors, preferences. Persists context across sessions.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_path: { type: "string", description: "Absolute path of the repository" },
+          conversation_id: { type: "string", description: "Current conversation identifier" },
+          agent_name: { type: "string", description: "Agent name (build, plan, debug-expert, etc.)" },
+          memory_type: { type: "string", enum: ["context", "decision", "finding", "pattern", "error", "preference"] },
+          content: { type: "string", description: "Full memory content (2-4 sentences)" },
+          summary: { type: "string", description: "One-line summary for quick scanning" },
+          tags: { type: "array", items: { type: "string" } },
+          importance: { type: "number", minimum: 0, maximum: 1 },
+        },
+        required: ["repo_path", "conversation_id", "agent_name", "memory_type", "content"],
+      },
+    },
+    {
+      name: "memory_search",
+      description: "Full-text search across all past conversation memories.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_path: { type: "string" },
+          query: { type: "string", description: "FTS5 search query" },
+          agent_name: { type: "string" },
+          memory_type: { type: "string", enum: ["context", "decision", "finding", "pattern", "error", "preference"] },
+          conversation_id: { type: "string" },
+          limit: { type: "number" },
+        },
+        required: ["repo_path", "query"],
+      },
+    },
+    {
+      name: "memory_get",
+      description: "Get recent memories for a conversation or agent.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_path: { type: "string" },
+          conversation_id: { type: "string" },
+          agent_name: { type: "string" },
+          limit: { type: "number" },
+          offset: { type: "number" },
+        },
+        required: ["repo_path"],
+      },
+    },
+    {
+      name: "memory_search_vector",
+      description: "Semantic vector search across memories. Requires a 768-dim embedding.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_path: { type: "string" },
+          embedding: { type: "array", items: { type: "number" }, description: "768-dimensional embedding vector" },
+          limit: { type: "number" },
+          threshold: { type: "number", description: "Max cosine distance (default 0.5)" },
+        },
+        required: ["repo_path", "embedding"],
+      },
+    },
+    {
+      name: "memory_update",
+      description: "Update an existing memory.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_path: { type: "string" },
+          id: { type: "number" },
+          content: { type: "string" },
+          summary: { type: "string" },
+          tags: { type: "array", items: { type: "string" } },
+          importance: { type: "number" },
+        },
+        required: ["repo_path", "id"],
+      },
+    },
+    {
+      name: "memory_compact",
+      description: "Merge old memories in a conversation to save space.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_path: { type: "string" },
+          conversation_id: { type: "string" },
+        },
+        required: ["repo_path", "conversation_id"],
+      },
+    },
+    {
+      name: "memory_prune",
+      description: "Delete old low-importance memories.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_path: { type: "string" },
+          keep_days: { type: "number" },
+          keep_important: { type: "boolean" },
+        },
+        required: ["repo_path"],
+      },
+    },
+    {
+      name: "memory_repos",
+      description: "List all repositories with stored memories.",
+      inputSchema: { type: "object", properties: {} },
+    },
+
+    // ── Knowledge Base tools ────────────────────────────────
+    {
+      name: "knowledge_save",
+      description: `Save or update a knowledge entry. Categories:
+- file: what a file does, its exports/imports (key = file path)
+- command: CLI commands available (key = command name like "test", "build")
+- architecture: system architecture, layers, patterns (key = area name)
+- api: endpoints, their params, responses (key = "METHOD /path")
+- config: env vars, setup, configuration (key = config area)
+- schema: database tables, columns, relationships (key = table name)
+- workflow: how to do common tasks (key = workflow name)
+- gotcha: known pitfalls and workarounds (key = issue name)`,
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_path: { type: "string" },
+          category: { type: "string", enum: VALID_CATEGORIES, description: "Knowledge category" },
+          key: { type: "string", description: "Unique identifier (file path, command name, etc.)" },
+          title: { type: "string", description: "Short human-readable title" },
+          content: { type: "string", description: "Detailed description" },
+          metadata: { type: "object", description: "Category-specific structured data (JSON)" },
+          tags: { type: "array", items: { type: "string" } },
+          indexed_by: { type: "string", description: "Agent that indexed this" },
+          importance: { type: "number", minimum: 0, maximum: 1 },
+        },
+        required: ["repo_path", "category", "key", "title"],
+      },
+    },
+    {
+      name: "knowledge_batch_save",
+      description: "Batch save multiple knowledge entries in one transaction.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_path: { type: "string" },
+          entries: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                category: { type: "string", enum: VALID_CATEGORIES },
+                key: { type: "string" },
+                title: { type: "string" },
+                content: { type: "string" },
+                metadata: { type: "object" },
+                tags: { type: "array", items: { type: "string" } },
+                importance: { type: "number" },
+              },
+              required: ["category", "key", "title"],
+            },
+            description: "Array of knowledge entries to save",
+          },
+          indexed_by: { type: "string" },
+        },
+        required: ["repo_path", "entries"],
+      },
+    },
+    {
+      name: "knowledge_search",
+      description: "Search the knowledge base by text. Searches across keys, titles, content, and tags. Optionally filter by category.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_path: { type: "string" },
+          query: { type: "string", description: "Search query" },
+          category: { type: "string", enum: VALID_CATEGORIES, description: "Filter by category (optional)" },
+          limit: { type: "number" },
+        },
+        required: ["repo_path", "query"],
+      },
+    },
+    {
+      name: "knowledge_get",
+      description: "Get a specific knowledge entry by category and key.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_path: { type: "string" },
+          category: { type: "string", enum: VALID_CATEGORIES },
+          key: { type: "string" },
+        },
+        required: ["repo_path", "category", "key"],
+      },
+    },
+    {
+      name: "knowledge_list",
+      description: "List all knowledge entries for a repo. Optionally filter by category.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_path: { type: "string" },
+          category: { type: "string", enum: VALID_CATEGORIES },
+          limit: { type: "number" },
+          offset: { type: "number" },
+        },
+        required: ["repo_path"],
+      },
+    },
+    {
+      name: "knowledge_stats",
+      description: "Get knowledge base stats — total entries, count by category, most accessed.",
+      inputSchema: {
+        type: "object",
+        properties: { repo_path: { type: "string" } },
+        required: ["repo_path"],
+      },
+    },
+    {
+      name: "knowledge_stale",
+      description: "Find knowledge entries that might be outdated (indexed long ago).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_path: { type: "string" },
+          category: { type: "string", enum: VALID_CATEGORIES },
+          older_than_days: { type: "number" },
+          limit: { type: "number" },
+        },
+        required: ["repo_path"],
+      },
+    },
+    {
+      name: "knowledge_delete",
+      description: "Delete a knowledge entry.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo_path: { type: "string" },
+          category: { type: "string", enum: VALID_CATEGORIES },
+          key: { type: "string" },
+        },
+        required: ["repo_path", "category", "key"],
+      },
+    },
   ],
 }));
 
@@ -251,6 +535,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "kanban_get_or_create_board": {
         const board = getOrCreateBoard(params.repo_path as string);
         return { content: [{ type: "text", text: JSON.stringify(board) }] };
+      }
+
+      case "kanban_reorder_boards": {
+        const boardIds = params.board_ids as number[];
+        if (!Array.isArray(boardIds)) {
+          return { content: [{ type: "text", text: "Error: board_ids must be an array" }] };
+        }
+        reorderBoards(boardIds);
+        return {
+          content: [{ type: "text", text: JSON.stringify({ success: true }) }],
+        };
       }
 
       // ── Session tools ────────────────────────────────────────
@@ -347,20 +642,161 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      // ── Repos tool ────────────────────────────────────────
-      case "kanban_get_repos": {
-        const repos = getDistinctRepos();
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({ count: repos.length, repos }),
-            },
-          ],
-        };
-      }
+       // ── Repos tool ────────────────────────────────────────
+       case "kanban_get_repos": {
+         const repos = getDistinctRepos();
+         return {
+           content: [
+             {
+               type: "text",
+               text: JSON.stringify({ count: repos.length, repos }),
+             },
+           ],
+         };
+       }
 
-      default:
+       // ── Memory tools ────────────────────────────────────────
+       case "memory_save": {
+         const id = saveMemory(params.repo_path as string, {
+           conversationId: params.conversation_id as string,
+           agentName: params.agent_name as string,
+            memoryType: params.memory_type as MemoryType,
+            content: params.content as string,
+            summary: (params.summary as string) || null,
+            tags: (params.tags as string[]) || null,
+            importance: (params.importance as number) || 0.5,
+          });
+          return { content: [{ type: "text", text: JSON.stringify({ saved: true, id }) }] };
+        }
+
+        case "memory_search": {
+          const results = searchMemories(params.repo_path as string, {
+            query: params.query as string,
+            agentName: params.agent_name as string | undefined,
+            memoryType: params.memory_type as MemoryType | undefined,
+           conversationId: params.conversation_id as string | undefined,
+           limit: (params.limit as number) || 20,
+         });
+         return { content: [{ type: "text", text: JSON.stringify({ count: results.length, memories: results }) }] };
+       }
+
+       case "memory_get": {
+         const results = getMemories(params.repo_path as string, {
+           conversationId: params.conversation_id as string | undefined,
+           agentName: params.agent_name as string | undefined,
+           limit: (params.limit as number) || 50,
+           offset: (params.offset as number) || 0,
+         });
+         return { content: [{ type: "text", text: JSON.stringify({ count: results.length, memories: results }) }] };
+       }
+
+       case "memory_search_vector": {
+         const embedding = params.embedding as number[];
+         if (!embedding || embedding.length !== 768) {
+           return { content: [{ type: "text", text: "Error: embedding must be a 768-dimensional array" }], isError: true };
+         }
+         const results = searchMemoriesByVector(params.repo_path as string, {
+           embedding,
+           limit: (params.limit as number) || 20,
+           threshold: (params.threshold as number) || 0.5,
+         });
+         return { content: [{ type: "text", text: JSON.stringify({ count: results.length, memories: results }) }] };
+       }
+
+       case "memory_update": {
+         const updated = updateMemory(params.repo_path as string, params.id as number, {
+           content: params.content as string | undefined,
+           summary: params.summary as string | undefined,
+           tags: params.tags as string[] | undefined,
+           importance: params.importance as number | undefined,
+         });
+         return { content: [{ type: "text", text: JSON.stringify({ updated }) }] };
+       }
+
+       case "memory_compact": {
+         const result = compactConversationMemories(params.repo_path as string, params.conversation_id as string);
+         return { content: [{ type: "text", text: JSON.stringify(result) }] };
+       }
+
+       case "memory_prune": {
+         const removed = pruneMemories(params.repo_path as string, {
+           keepDays: (params.keep_days as number) || 90,
+           keepImportant: params.keep_important !== false,
+         });
+         return { content: [{ type: "text", text: JSON.stringify({ removed }) }] };
+       }
+
+       case "memory_repos": {
+         const repos = getRepos();
+         return { content: [{ type: "text", text: JSON.stringify({ count: repos.length, repos }) }] };
+       }
+
+       // ── Knowledge Base tools ────────────────────────────────
+       case "knowledge_save": {
+          saveKnowledge(params.repo_path as string, {
+            category: params.category as KnowledgeCategory,
+            key: params.key as string,
+            title: params.title as string,
+            content: (params.content as string) || null,
+           metadata: (params.metadata as Record<string, unknown>) || null,
+           tags: (params.tags as string[]) || null,
+           indexedBy: (params.indexed_by as string) || null,
+           importance: (params.importance as number) || 0.5,
+         });
+         return { content: [{ type: "text", text: JSON.stringify({ saved: true, category: params.category, key: params.key }) }] };
+       }
+
+       case "knowledge_batch_save": {
+         const count = batchSaveKnowledge(
+           params.repo_path as string,
+            params.entries as Array<{ category: KnowledgeCategory; key: string; title: string; content?: string; metadata?: Record<string, unknown>; tags?: string[]; importance?: number }>,
+           params.indexed_by as string | undefined,
+         );
+         return { content: [{ type: "text", text: JSON.stringify({ saved: count }) }] };
+       }
+
+       case "knowledge_search": {
+         const results = searchKnowledge(params.repo_path as string, {
+           query: params.query as string,
+            category: (params.category as KnowledgeCategory) || undefined,
+         });
+         return { content: [{ type: "text", text: JSON.stringify({ count: results.length, entries: results }) }] };
+       }
+
+       case "knowledge_get": {
+          const result = getKnowledge(params.repo_path as string, { category: params.category as KnowledgeCategory, key: params.key as string });
+         return { content: [{ type: "text", text: JSON.stringify(result || { found: false }) }] };
+       }
+
+       case "knowledge_list": {
+         const results = listKnowledge(params.repo_path as string, {
+            category: (params.category as KnowledgeCategory) || undefined,
+            limit: (params.limit as number) || 200,
+           offset: (params.offset as number) || 0,
+         });
+         return { content: [{ type: "text", text: JSON.stringify({ count: results.length, entries: results }) }] };
+       }
+
+       case "knowledge_stats": {
+         const stats = getKnowledgeStats(params.repo_path as string);
+         return { content: [{ type: "text", text: JSON.stringify(stats) }] };
+       }
+
+       case "knowledge_stale": {
+         const results = getStaleKnowledge(params.repo_path as string, {
+            category: (params.category as KnowledgeCategory) || undefined,
+            olderThanDays: (params.older_than_days as number) || 7,
+           limit: (params.limit as number) || 100,
+         });
+         return { content: [{ type: "text", text: JSON.stringify({ count: results.length, entries: results }) }] };
+       }
+
+       case "knowledge_delete": {
+          const deleted = deleteKnowledge(params.repo_path as string, { category: params.category as KnowledgeCategory, key: params.key as string });
+         return { content: [{ type: "text", text: JSON.stringify({ deleted }) }] };
+       }
+
+       default:
         return {
           content: [{ type: "text", text: `Unknown tool: ${name}` }],
           isError: true,

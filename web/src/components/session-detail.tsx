@@ -32,6 +32,9 @@ import {
   HelpCircle,
   Trash2,
   AlertCircle,
+  Activity,
+  Sparkles,
+  MessageCircle,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -53,6 +56,7 @@ import {
   TooltipContent,
 } from "@/components/ui/tooltip";
 import { Popover as PopoverPrimitive } from "radix-ui";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 
 const Popover = PopoverPrimitive.Root;
@@ -118,6 +122,7 @@ interface SessionDetailProps {
   newSessionDirectory?: string | null;
   onSessionCreated?: (sessionId: string) => void;
   boardId?: number | null;
+  onEpicCreated?: (epicId: number) => void;
 }
 
 /* ── Helpers ───────────────────────────────────────────── */
@@ -149,6 +154,31 @@ function stripMandatoryTags(text: string | undefined | null): string {
   return text.replace(/<mandatory>[\s\S]*?<\/mandatory>\s*/g, "").trim();
 }
 
+function extractSwarmPlan(
+  text: string,
+): Array<{ title: string; description: string }> | null {
+  const match = text.match(/<swarm-plan>([\s\S]*?)<\/swarm-plan>/);
+  if (!match) return null;
+  try {
+    let parsed = JSON.parse(match[1].trim());
+    if (!Array.isArray(parsed) && typeof parsed === "object" && parsed.subtasks) {
+      parsed = parsed.subtasks;
+    }
+    if (Array.isArray(parsed) && parsed.length >= 2 && parsed.every((s: any) => s.title)) {
+      return parsed.map((s: any) => ({
+        title: String(s.title),
+        description: String(s.description || ""),
+      }));
+    }
+  } catch {}
+  return null;
+}
+
+/** Strip <swarm-plan>…</swarm-plan> blocks from displayed text, returning clean markdown */
+function stripSwarmPlanTags(text: string): string {
+  return text.replace(/<swarm-plan>[\s\S]*?<\/swarm-plan>/g, "").trim();
+}
+
 function extractTaskId(output: string): string | null {
   if (!output) return null;
   const match = output.match(/task_id:\s*(ses_[a-zA-Z0-9]+)/);
@@ -165,7 +195,6 @@ function formatTimeAgo(timestampMs: number): string {
   if (hours < 24) return `${hours}h ago`;
   return `${Math.floor(hours / 24)}d ago`;
 }
-
 
 function formatTokenCount(n: number | undefined | null): string {
   if (n == null || isNaN(n)) return "0";
@@ -219,26 +248,48 @@ const ProsePre = ({ children, ...props }: ComponentPropsWithoutRef<"pre">) => {
   let isJsonBlock = false;
 
   // ReactMarkdown renders code blocks as: <pre><code className="language-json">...</code></pre>
-  if (children && typeof children === "object" && "props" in (children as any)) {
+  if (
+    children &&
+    typeof children === "object" &&
+    "props" in (children as any)
+  ) {
     const child = children as any;
     isJsonBlock = child.props?.className?.includes("language-json") || false;
-    codeContent = typeof child.props?.children === "string" ? child.props.children : null;
+    codeContent =
+      typeof child.props?.children === "string" ? child.props.children : null;
   }
+
+  // Extract raw text for the copy button (handles both structured children and plain string children)
+  const rawText = codeContent || (typeof children === "string" ? children : "");
 
   if (isJsonBlock && codeContent) {
     const statusData = tryParseStatusJson(codeContent);
     if (statusData) {
-      return <StatusCard data={statusData} />;
+      return (
+        <div className="relative group my-2">
+          <StatusCard data={statusData} />
+          <div className="absolute top-1 right-1">
+            <CopyButton text={codeContent} />
+          </div>
+        </div>
+      );
     }
   }
 
   return (
-    <pre
-      {...props}
-      className="bg-muted text-muted-foreground rounded-md p-3 text-xs overflow-x-auto my-2 leading-relaxed"
-    >
-      {children}
-    </pre>
+    <div className="relative group my-2">
+      <pre
+        {...props}
+        className="bg-muted text-muted-foreground rounded-md p-3 text-xs overflow-x-auto leading-relaxed"
+      >
+        {children}
+      </pre>
+      {rawText && (
+        <div className="absolute top-1 right-1">
+          <CopyButton text={rawText} />
+        </div>
+      )}
+    </div>
   );
 };
 
@@ -340,7 +391,11 @@ interface StatusMessage {
   status: "SUCCESS" | "FAILURE" | "PARTIAL";
   files_modified?: string[];
   summary?: string;
-  validation_result?: "VALIDATION_PASSED" | "VALIDATION_FAILED" | "NOT_RUN" | string;
+  validation_result?:
+    | "VALIDATION_PASSED"
+    | "VALIDATION_FAILED"
+    | "NOT_RUN"
+    | string;
   errors?: string | null | Array<{ message: string }> | Record<string, string>;
   [key: string]: unknown;
 }
@@ -390,17 +445,31 @@ const StatusCard = memo(function StatusCard({ data }: { data: StatusMessage }) {
   };
 
   const config = statusConfig[data.status] || statusConfig.PARTIAL;
-  const hasValidation = !!data.validation_result && data.validation_result !== "NOT_RUN";
+  const hasValidation =
+    !!data.validation_result && data.validation_result !== "NOT_RUN";
 
   return (
-    <div className={cn("rounded-lg border overflow-hidden my-2", config.border, config.bg)}>
+    <div
+      className={cn(
+        "rounded-lg border overflow-hidden my-2",
+        config.border,
+        config.bg,
+      )}
+    >
       {/* Status header */}
       <div className={cn("flex items-center gap-2 px-3 py-2", config.bg)}>
         {config.icon}
         <span className="text-xs font-semibold">{config.label}</span>
         {hasValidation && (
-          <span className={cn("ml-auto text-[10px] px-1.5 py-0.5 rounded-full font-medium", config.badge)}>
-            {data.validation_result === "VALIDATION_PASSED" ? "✓ Validation Passed" : data.validation_result}
+          <span
+            className={cn(
+              "ml-auto text-[10px] px-1.5 py-0.5 rounded-full font-medium",
+              config.badge,
+            )}
+          >
+            {data.validation_result === "VALIDATION_PASSED"
+              ? "✓ Validation Passed"
+              : data.validation_result}
           </span>
         )}
       </div>
@@ -408,7 +477,9 @@ const StatusCard = memo(function StatusCard({ data }: { data: StatusMessage }) {
       {/* Summary */}
       {data.summary && (
         <div className="px-3 py-2 border-t border-muted/50">
-          <p className="text-xs text-foreground leading-relaxed">{data.summary}</p>
+          <p className="text-xs text-foreground leading-relaxed">
+            {data.summary}
+          </p>
         </div>
       )}
 
@@ -425,7 +496,9 @@ const StatusCard = memo(function StatusCard({ data }: { data: StatusMessage }) {
             {data.files_modified.map((file, i) => (
               <div key={i} className="flex items-center gap-1.5 text-xs">
                 <span className="text-muted-foreground shrink-0">•</span>
-                <code className="font-mono text-muted-foreground truncate">{file}</code>
+                <code className="font-mono text-muted-foreground truncate">
+                  {file}
+                </code>
               </div>
             ))}
           </div>
@@ -435,12 +508,64 @@ const StatusCard = memo(function StatusCard({ data }: { data: StatusMessage }) {
       {/* Errors */}
       {data.errors && (
         <div className="px-3 py-2 border-t border-red-500/20 bg-red-500/5">
-          <span className="text-[10px] font-medium text-red-500 uppercase tracking-wide">Errors</span>
+          <span className="text-[10px] font-medium text-red-500 uppercase tracking-wide">
+            Errors
+          </span>
           <p className="text-xs text-red-600 dark:text-red-400 mt-0.5">
-            {typeof data.errors === "string" ? data.errors : JSON.stringify(data.errors, null, 2)}
+            {typeof data.errors === "string"
+              ? data.errors
+              : JSON.stringify(data.errors, null, 2)}
           </p>
         </div>
       )}
+    </div>
+  );
+});
+
+const SwarmPlanCard = memo(function SwarmPlanCard({
+  subtasks,
+}: {
+  subtasks: Array<{ title: string; description: string }>;
+}) {
+  return (
+    <div className="rounded-lg border overflow-hidden my-2 border-amber-500/30 bg-amber-500/5">
+      {/* Header */}
+      <div className="flex items-center gap-2 px-3 py-2 bg-amber-500/10">
+        <span className="text-sm">🐝</span>
+        <span className="text-xs font-semibold text-amber-600 dark:text-amber-400">
+          Swarm Plan
+        </span>
+        <Badge
+          variant="secondary"
+          className="text-[10px] bg-amber-500/20 text-amber-600 dark:text-amber-400 border-0 ml-auto"
+        >
+          {subtasks.length} subtasks
+        </Badge>
+      </div>
+
+      {/* Subtask list */}
+      <div className="divide-y divide-border/50">
+        {subtasks.map((subtask, i) => (
+          <div key={i} className="px-3 py-2 flex gap-2.5">
+            <div className="flex flex-col items-center gap-0.5 pt-0.5">
+              <span className="flex items-center justify-center w-5 h-5 rounded-full bg-amber-500/15 text-[10px] font-bold text-amber-600 dark:text-amber-400 shrink-0">
+                {i + 1}
+              </span>
+              {i < subtasks.length - 1 && (
+                <div className="w-px flex-1 bg-amber-500/20 min-h-1" />
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-medium text-foreground leading-snug">
+                {subtask.title}
+              </p>
+              <p className="text-[11px] text-muted-foreground leading-relaxed mt-0.5 line-clamp-3">
+                {subtask.description}
+              </p>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 });
@@ -452,7 +577,7 @@ function extractToolSummary(toolCall: ToolCall): {
   label: string;
   detail: string;
 } {
-   const input = (toolCall.input || {}) as Record<string, any>;
+  const input = (toolCall.input || {}) as Record<string, any>;
   switch (toolCall.tool) {
     case "bash":
     case "exec": {
@@ -627,7 +752,9 @@ const QuestionToolCard = memo(function QuestionToolCard({
   onAnswerSubmitted: () => void;
 }) {
   const [answers, setAnswers] = useState<Record<number, string[]>>({});
-  const [customAnswers, setCustomAnswers] = useState<Record<number, string>>({});
+  const [customAnswers, setCustomAnswers] = useState<Record<number, string>>(
+    {},
+  );
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [questionId, setQuestionId] = useState<string | null>(null);
@@ -649,7 +776,10 @@ const QuestionToolCard = memo(function QuestionToolCard({
   useEffect(() => {
     if (questionFetched || !isRunning || submitted) return;
     setQuestionFetched(true);
-    fetch(`/api/opencode/question${directory ? `?directory=${encodeURIComponent(directory)}` : ""}`, { cache: "no-store" })
+    fetch(
+      `/api/opencode/question${directory ? `?directory=${encodeURIComponent(directory)}` : ""}`,
+      { cache: "no-store" },
+    )
       .then((res) => (res.ok ? res.json() : []))
       .then(
         (
@@ -667,7 +797,14 @@ const QuestionToolCard = memo(function QuestionToolCard({
         },
       )
       .catch(() => {});
-  }, [isRunning, submitted, questionFetched, sessionId, toolCall.callID, directory]);
+  }, [
+    isRunning,
+    submitted,
+    questionFetched,
+    sessionId,
+    toolCall.callID,
+    directory,
+  ]);
 
   // If completed, show what was answered
   if (!isRunning || submitted) {
@@ -789,7 +926,7 @@ const QuestionToolCard = memo(function QuestionToolCard({
   };
 
   const allAnswered = questions.every(
-    (_, i) => (answers[i]?.length || 0) > 0 || customAnswers[i]?.trim()
+    (_, i) => (answers[i]?.length || 0) > 0 || customAnswers[i]?.trim(),
   );
 
   return (
@@ -816,7 +953,7 @@ const QuestionToolCard = memo(function QuestionToolCard({
                       "text-xs px-2.5 py-1.5 rounded-md border transition-colors text-left",
                       isSelected
                         ? "border-blue-500 bg-blue-500/20 text-foreground"
-                        : "border-muted bg-background hover:bg-muted/50"
+                        : "border-muted bg-background hover:bg-muted/50",
                     )}
                   >
                     <span className="font-medium">{opt.label}</span>
@@ -863,7 +1000,7 @@ const QuestionToolCard = memo(function QuestionToolCard({
             "text-xs px-3 py-1.5 rounded-md font-medium transition-colors",
             allAnswered && !submitting
               ? "bg-blue-500 text-white hover:bg-blue-600"
-              : "bg-muted text-muted-foreground cursor-not-allowed"
+              : "bg-muted text-muted-foreground cursor-not-allowed",
           )}
         >
           {submitting ? "Submitting…" : "Submit Answers"}
@@ -967,45 +1104,77 @@ const MessageRow = memo(function MessageRow({
             </div>
           </CollapsibleContent>
         </Collapsible>
-       )}
+      )}
 
-       {/* Text content */}
-       {msg.text && (() => {
-         // Check if entire message is a raw JSON status (no markdown wrapper)
-         const entireStatus = msg.role === "assistant" ? tryParseStatusJson(msg.text) : null;
+      {/* Text content */}
+      {msg.text &&
+        (() => {
+          // Check if entire message is a raw JSON status (no markdown wrapper)
+          const entireStatus =
+            msg.role === "assistant" ? tryParseStatusJson(msg.text) : null;
 
-         return (
-           <div
-             className={cn(
-               "rounded-lg px-3 py-2",
-               msg.role === "user"
-                 ? "bg-primary text-primary-foreground ml-auto max-w-[85%]"
-                 : "relative group text-foreground",
-             )}
-           >
-             <div className="text-sm">
-               {entireStatus ? (
-                 <StatusCard data={entireStatus} />
-               ) : (
-                 <MarkdownContent
-                   content={msg.role === "user" ? stripMandatoryTags(msg.text) : msg.text}
-                   className={cn(
-                     msg.role === "user" &&
-                       "[&_a]:text-primary-foreground/80 [&_a]:underline",
-                   )}
-                 />
-               )}
-             </div>
-             {msg.role === "assistant" && (
-               <div className="absolute top-1 right-1">
-                 <CopyButton text={msg.text} />
-               </div>
-             )}
-           </div>
-         );
-       })()}
+          // Check for swarm plan in assistant messages
+          const swarmPlan =
+            msg.role === "assistant" ? extractSwarmPlan(msg.text) : null;
 
-       {/* Tool calls */}
+          // For messages with swarm plan: show surrounding text as markdown + the plan card
+          if (swarmPlan) {
+            const cleanText = stripSwarmPlanTags(msg.text);
+            return (
+              <div className="relative group text-foreground">
+                {cleanText && (
+                  <div className="rounded-lg px-3 py-2">
+                    <div className="text-sm">
+                      <MarkdownContent content={cleanText} />
+                    </div>
+                  </div>
+                )}
+                <div className="px-3">
+                  <SwarmPlanCard subtasks={swarmPlan} />
+                </div>
+                <div className="absolute top-1 right-1">
+                  <CopyButton text={msg.text} />
+                </div>
+              </div>
+            );
+          }
+
+          return (
+            <div
+              className={cn(
+                "rounded-lg px-3 py-2",
+                msg.role === "user"
+                  ? "bg-primary text-primary-foreground ml-auto max-w-[85%]"
+                  : "relative group text-foreground",
+              )}
+            >
+              <div className="text-sm">
+                {entireStatus ? (
+                  <StatusCard data={entireStatus} />
+                ) : (
+                  <MarkdownContent
+                    content={
+                      msg.role === "user"
+                        ? stripMandatoryTags(msg.text)
+                        : msg.text
+                    }
+                    className={cn(
+                      msg.role === "user" &&
+                        "[&_a]:text-primary-foreground/80 [&_a]:underline",
+                    )}
+                  />
+                )}
+              </div>
+              {msg.role === "assistant" && (
+                <div className="absolute top-1 right-1">
+                  <CopyButton text={msg.text} />
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+      {/* Tool calls */}
       {msg.tool_calls && msg.tool_calls.length > 0 && (
         <div className="mt-1 space-y-1">
           {msg.tool_calls.map((toolCall) => {
@@ -1024,20 +1193,22 @@ const MessageRow = memo(function MessageRow({
             if (toolCall.tool === "task") {
               // Try to get taskId from output first
               let taskId = extractTaskId(toolCall.output);
-              
+
               // If no taskId from output, try to match child from children array by description
               if (!taskId) {
-                const description = (toolCall.input as Record<string, string>)?.description;
+                const description = (toolCall.input as Record<string, string>)
+                  ?.description;
                 if (description) {
                   const matchingChild = children.find(
-                    (c) => c.title === description || c.title?.includes(description)
+                    (c) =>
+                      c.title === description || c.title?.includes(description),
                   );
                   if (matchingChild) {
                     taskId = matchingChild.id;
                   }
                 }
               }
-              
+
               const childStatus = taskId ? sessionStatuses[taskId] : undefined;
               // Consider tool call status AND session status for busy state
               const isBusy =
@@ -1188,6 +1359,580 @@ const TodoPanel = memo(function TodoPanel({ todos }: { todos: TodoItem[] }) {
   );
 });
 
+/* ── File Mention Dropdown ─────────────────────────────── */
+
+interface FileEntry {
+  name: string;
+  relativePath: string;
+}
+
+const FileMentionDropdown = memo(function FileMentionDropdown({
+  directory,
+  query,
+  selectedIndex,
+  onSelect,
+  onClose,
+  onFilesUpdate,
+}: {
+  directory: string;
+  query: string;
+  selectedIndex: number;
+  onSelect: (file: FileEntry) => void;
+  onClose: () => void;
+  onFilesUpdate: (files: FileEntry[]) => void;
+}) {
+  const [files, setFiles] = useState<FileEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  // Fetch files when directory or query changes
+  useEffect(() => {
+    if (!directory) return;
+    setLoading(true);
+    const controller = new AbortController();
+    const params = new URLSearchParams({ directory });
+    if (query) params.set("query", query);
+    fetch(`/api/filesystem/search-files?${params}`, {
+      signal: controller.signal,
+    })
+      .then((r) => r.json())
+      .then((data: { files: FileEntry[] }) => {
+        const fileList = data.files || [];
+        setFiles(fileList);
+        onFilesUpdate(fileList);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+    return () => controller.abort();
+  }, [directory, query, onFilesUpdate]);
+
+  // Scroll selected item into view
+  useEffect(() => {
+    if (!listRef.current) return;
+    const selected = listRef.current.children[selectedIndex] as
+      | HTMLElement
+      | undefined;
+    selected?.scrollIntoView({ block: "nearest" });
+  }, [selectedIndex]);
+
+  // Close on Escape is handled by parent
+  if (!directory) return null;
+  // Don't render during initial load to avoid flash of "No files found"
+  if (loading && files.length === 0) return null;
+  if (!loading && files.length === 0) return null;
+
+  return (
+    <div className="absolute bottom-full left-0 right-0 mb-1 max-h-52 overflow-hidden rounded-md border border-muted bg-popover shadow-lg z-50">
+      <div ref={listRef} className="overflow-y-auto max-h-52">
+        {loading ? (
+          <div className="px-3 py-2 text-xs text-muted-foreground flex items-center gap-2">
+            <Loader2 className="w-3 h-3 animate-spin" />
+            <span>Searching files…</span>
+          </div>
+        ) : files.length === 0 ? (
+          <div className="px-3 py-2 text-xs text-muted-foreground">
+            No files found
+          </div>
+        ) : (
+          files.map((file, i) => (
+            <button
+              key={file.relativePath}
+              className={cn(
+                "w-full text-left px-3 py-1.5 text-xs hover:bg-muted/50 transition-colors flex items-center gap-2",
+                i === selectedIndex && "bg-muted/50",
+              )}
+              onClick={() => onSelect(file)}
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              <FileText className="w-3 h-3 shrink-0 text-muted-foreground" />
+              <span className="truncate font-mono">{file.relativePath}</span>
+            </button>
+          ))
+        )}
+      </div>
+    </div>
+  );
+});
+
+/* ── ChatInput Component ───────────────────────────────── */
+
+interface ChatInputProps {
+  sending: boolean;
+  isBusy: boolean;
+  agents: {
+    name: string;
+    description?: string;
+    mode?: string;
+    model?: { providerID: string; modelID: string };
+  }[];
+  selectedAgent: string;
+  onAgentChange: (agent: string) => void;
+  onSend: (text: string) => Promise<void>;
+  onStop: () => void;
+  contextTokens: number;
+  contextLimit: number;
+  modelName: string;
+  sessionId: string | null;
+  onClose: () => void;
+  data: SessionData | null;
+  directory: string | null;
+  isSwarmAvailable?: boolean;
+  swarmEnabled?: boolean;
+  onSwarmToggle?: (enabled: boolean) => void;
+}
+
+const LINE_HEIGHT = 20;
+const MAX_TEXTAREA_HEIGHT = LINE_HEIGHT * 4 + 16;
+
+function getDraftKey(
+  sessionId: string | null,
+  directory: string | null,
+): string {
+  if (sessionId) return `kanban_draft_${sessionId}`;
+  if (directory) return `kanban_draft_new_${directory}`;
+  return `kanban_draft_new`;
+}
+
+const ChatInput = memo(function ChatInput({
+  sending,
+  isBusy,
+  agents,
+  selectedAgent,
+  onAgentChange,
+  onSend,
+  onStop,
+  contextTokens,
+  contextLimit,
+  modelName,
+  sessionId,
+  onClose,
+  data,
+  directory,
+  isSwarmAvailable,
+  swarmEnabled,
+  onSwarmToggle,
+}: ChatInputProps) {
+  const [inputValue, setInputValue] = useState("");
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState("");
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const mentionStartRef = useRef<number | null>(null);
+  const mentionFilesRef = useRef<FileEntry[]>([]);
+
+  const draftKey = useMemo(
+    () => getDraftKey(sessionId || null, directory || null),
+    [sessionId, directory],
+  );
+
+  const handleMentionFilesUpdate = useCallback((files: FileEntry[]) => {
+    mentionFilesRef.current = files;
+    // Clamp selection index to files length
+    setMentionIndex((prev) => Math.min(prev, Math.max(0, files.length - 1)));
+  }, []);
+
+  // Restore draft from localStorage on mount or when draftKey changes
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(draftKey);
+      if (saved) {
+        setInputValue(saved);
+        // Set textarea height
+        requestAnimationFrame(() => {
+          if (inputRef.current) {
+            inputRef.current.style.height = "auto";
+            inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, MAX_TEXTAREA_HEIGHT)}px`;
+          }
+        });
+      }
+    } catch {}
+  }, [draftKey]);
+
+  // Focus input when sending transitions from true to false
+  useEffect(() => {
+    if (!sending && inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, [sending]);
+
+  const handleSend = useCallback(async () => {
+    const text = inputValue.trim();
+    if (!text) return;
+
+    try {
+      await onSend(text);
+      setInputValue("");
+      if (inputRef.current) {
+        inputRef.current.style.height = "auto";
+      }
+      try {
+        localStorage.removeItem(draftKey);
+      } catch {}
+    } catch (err) {
+      // Error is handled by parent, input stays filled so user can retry
+      console.error("Failed to send message:", err);
+    }
+  }, [inputValue, onSend, draftKey]);
+
+  const handleMentionSelect = useCallback(
+    (file: { name: string; relativePath: string }) => {
+      if (mentionStartRef.current === null) return;
+      const before = inputValue.slice(0, mentionStartRef.current);
+      const after = inputValue.slice(
+        inputRef.current?.selectionStart || inputValue.length,
+      );
+      const newText = `${before}@${file.relativePath} ${after}`;
+      setInputValue(newText);
+      setMentionOpen(false);
+      mentionStartRef.current = null;
+
+      // Save draft to localStorage
+      try {
+        localStorage.setItem(draftKey, newText);
+      } catch {}
+
+      // Set cursor position after the inserted mention
+      requestAnimationFrame(() => {
+        if (inputRef.current) {
+          const newPos = before.length + file.relativePath.length + 2; // +2 for @ and space
+          inputRef.current.selectionStart = newPos;
+          inputRef.current.selectionEnd = newPos;
+          inputRef.current.focus();
+          inputRef.current.style.height = "auto";
+          inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, MAX_TEXTAREA_HEIGHT)}px`;
+        }
+      });
+    },
+    [inputValue, draftKey],
+  );
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Mention dropdown navigation
+    if (mentionOpen) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setMentionIndex((prev) => prev + 1); // Will be clamped by dropdown
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setMentionIndex((prev) => Math.max(0, prev - 1));
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setMentionOpen(false);
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        const files = mentionFilesRef.current;
+        if (files.length > 0 && mentionIndex < files.length) {
+          handleMentionSelect(files[mentionIndex]);
+        }
+        return;
+      }
+    }
+
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+    if (e.key === "Tab" && agents.length > 1 && !mentionOpen) {
+      e.preventDefault();
+      const currentIdx = agents.findIndex((a) => a.name === selectedAgent);
+      const nextIdx = (currentIdx + 1) % agents.length;
+      onAgentChange(agents[nextIdx].name);
+    }
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value;
+    setInputValue(value);
+    const el = e.target;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, MAX_TEXTAREA_HEIGHT)}px`;
+
+    // Detect @ mention trigger
+    const cursorPos = el.selectionStart;
+    const textBeforeCursor = value.slice(0, cursorPos);
+
+    // Find the last @ that could be a mention trigger (preceded by start of string or whitespace)
+    const lastAtIndex = textBeforeCursor.lastIndexOf("@");
+    if (lastAtIndex !== -1) {
+      // Check if @ is preceded by start of string or whitespace
+      const charBefore =
+        lastAtIndex > 0 ? textBeforeCursor[lastAtIndex - 1] : " ";
+      if (charBefore === " " || charBefore === "\n" || lastAtIndex === 0) {
+        // Check if there's no whitespace between @ and cursor
+        const textAfterAt = textBeforeCursor.slice(lastAtIndex + 1);
+        if (!textAfterAt.includes(" ") && !textAfterAt.includes("\n")) {
+          mentionStartRef.current = lastAtIndex;
+          setMentionQuery(textAfterAt);
+          setMentionIndex(0);
+          if (!mentionOpen) setMentionOpen(true);
+          // Save draft to localStorage
+          try {
+            if (value.trim()) {
+              localStorage.setItem(draftKey, value);
+            } else {
+              localStorage.removeItem(draftKey);
+            }
+          } catch {}
+          return;
+        }
+      }
+    }
+    // No valid mention trigger
+    if (mentionOpen) {
+      setMentionOpen(false);
+      mentionStartRef.current = null;
+    }
+
+    // Save draft to localStorage
+    try {
+      if (value.trim()) {
+        localStorage.setItem(draftKey, value);
+      } else {
+        localStorage.removeItem(draftKey);
+      }
+    } catch {}
+  };
+
+  const handleFocus = () => {
+    if (inputRef.current && inputRef.current.value !== inputValue) {
+      setInputValue("");
+      inputRef.current.value = "";
+    }
+  };
+
+  return (
+    <div className="px-4 pt-3 pb-3">
+      {/* Input container with all elements inside */}
+      <div className="relative bg-input rounded-md">
+        <textarea
+          ref={inputRef}
+          value={inputValue}
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
+          onFocus={handleFocus}
+          onBlur={() => {
+            setTimeout(() => setMentionOpen(false), 150);
+          }}
+          placeholder="Send a message…"
+          rows={1}
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          data-gramm="false"
+          data-gramm_editor="false"
+          className={cn(
+            "w-full resize-none rounded-md border-0 bg-transparent px-3 py-2 text-sm text-white placeholder:text-muted-foreground outline-none focus:ring-0 min-h-[36px] disabled:opacity-50",
+            isBusy && "pr-10",
+          )}
+        />
+
+        {/* File mention dropdown */}
+        {mentionOpen && directory && (
+          <FileMentionDropdown
+            directory={directory}
+            query={mentionQuery}
+            selectedIndex={mentionIndex}
+            onSelect={handleMentionSelect}
+            onClose={() => setMentionOpen(false)}
+            onFilesUpdate={handleMentionFilesUpdate}
+          />
+        )}
+
+        {/* Stop button — top right, inside textarea */}
+        {isBusy && (
+          <button
+            onClick={onStop}
+            className="absolute top-2 right-2 text-muted-foreground hover:text-destructive transition-colors"
+          >
+            <Square className="w-3.5 h-3.5 fill-current" />
+          </button>
+        )}
+
+        {/* Loading bar — bottom of textarea */}
+        {isBusy && (
+          <div className="absolute bottom-0 left-0 right-0 h-[2px] rounded-b-md overflow-hidden">
+            <div
+              className="h-full bg-primary/60"
+              style={{ animation: "loading-bar 2s ease-in-out infinite" }}
+            />
+          </div>
+        )}
+
+        {/* Bottom bar INSIDE the input container */}
+        <div className="flex items-center justify-between px-3 py-2 border-t border-muted-foreground/10 text-xs text-muted-foreground">
+          {/* Left side: agent selector only */}
+          <div className="flex items-center gap-2">
+            {agents.length > 0 && (
+              <div className="flex items-center gap-1.5">
+                <span>{toCamelCase(selectedAgent)}</span>
+                <kbd className="inline-flex items-center justify-center h-5 w-5 rounded border border-muted-foreground/30 bg-muted/20 text-[10px] font-mono">
+                  ⇥
+                </kbd>
+              </div>
+            )}
+          </div>
+
+          {/* Right side: context tokens + model name + Done button + swarm toggle */}
+          <div className="flex items-center gap-2">
+            {data &&
+              (() => {
+                const used = contextTokens || 0;
+                const limit = contextLimit;
+                const ratio = limit > 0 ? Math.min(used / limit, 1) : 0;
+                const pct = Math.round(ratio * 100);
+                const circumference = 2 * Math.PI * 6;
+                return (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div className="flex items-center gap-1.5 cursor-default">
+                        <svg
+                          width="16"
+                          height="16"
+                          viewBox="0 0 16 16"
+                          className="shrink-0 -rotate-90"
+                        >
+                          <circle
+                            cx="8"
+                            cy="8"
+                            r="6"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            className="text-muted-foreground/20"
+                          />
+                          <circle
+                            cx="8"
+                            cy="8"
+                            r="6"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeDasharray={circumference}
+                            strokeDashoffset={circumference * (1 - ratio)}
+                            strokeLinecap="round"
+                            className={cn(
+                              ratio > 0.9
+                                ? "text-red-500"
+                                : ratio > 0.75
+                                  ? "text-yellow-500"
+                                  : "text-primary",
+                            )}
+                          />
+                        </svg>
+                        <span className="tabular-nums">
+                          {formatTokenCount(used)}
+                          {limit > 0 && `/${formatTokenCount(limit)}`}
+                        </span>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent
+                      side="top"
+                      sideOffset={6}
+                      className="text-xs"
+                    >
+                      {formatTokenCount(used)}
+                      {limit > 0 ? ` / ${formatTokenCount(limit)}` : ""} used
+                      {limit > 0 ? ` (${pct}%)` : ""}
+                    </TooltipContent>
+                  </Tooltip>
+                );
+              })()}
+            {data &&
+              (() => {
+                const displayName = getModelDisplayName(modelName);
+                return displayName ? (
+                  <span className="truncate text-xs">{displayName}</span>
+                ) : null;
+              })()}
+            {sessionId && (
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-5 text-xs text-muted-foreground hover:text-foreground px-1.5 py-0"
+                    disabled={sending}
+                  >
+                    Done
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent
+                  side="top"
+                  sideOffset={8}
+                  align="end"
+                  className="w-auto p-3 rounded-lg bg-popover border"
+                >
+                  <div className="space-y-3">
+                    <p className="text-xs text-muted-foreground">
+                      Mark session as done?
+                    </p>
+                    <div className="flex items-center justify-end gap-2">
+                      <PopoverClose asChild>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-xs"
+                        >
+                          Cancel
+                        </Button>
+                      </PopoverClose>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        className="h-7 text-xs"
+                        onClick={async () => {
+                          try {
+                            const res = await fetch(
+                              `/api/sessions/${sessionId}/complete`,
+                              { method: "POST" },
+                            );
+                            if (res.ok) onClose();
+                          } catch (err) {
+                            console.error(
+                              "Failed to mark session complete:",
+                              err,
+                            );
+                          }
+                        }}
+                      >
+                        Confirm
+                      </Button>
+                    </div>
+                  </div>
+                </PopoverContent>
+              </Popover>
+            )}
+            {isSwarmAvailable && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div>
+                    <Switch
+                      checked={swarmEnabled}
+                      onCheckedChange={onSwarmToggle}
+                      thumb={<span>🐝</span>}
+                      className="data-[state=checked]:bg-amber-500 data-[state=unchecked]:bg-white"
+                    />
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent side="top" sideOffset={6} className="text-xs">
+                  {swarmEnabled ? "SWARM ON" : "SWARM OFF"}
+                </TooltipContent>
+              </Tooltip>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+});
+
 /* ── Main component ────────────────────────────────────── */
 
 export default function SessionDetail({
@@ -1197,11 +1942,11 @@ export default function SessionDetail({
   newSessionDirectory,
   onSessionCreated,
   boardId,
+  onEpicCreated,
 }: SessionDetailProps) {
   const [data, setData] = useState<SessionData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [inputValue, setInputValue] = useState("");
   const [sending, setSending] = useState(false);
   const [agents, setAgents] = useState<
     {
@@ -1219,8 +1964,9 @@ export default function SessionDetail({
   const [sessionStatuses, setSessionStatuses] = useState<SessionStatusMap>({});
   const sessionDirRef = useRef<string | null>(null);
   const [activeChildId, setActiveChildId] = useState<string | null>(null);
-  const [modelContextLimits, setModelContextLimits] = useState<Record<string, number>>({});
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [modelContextLimits, setModelContextLimits] = useState<
+    Record<string, number>
+  >({});
   const panelRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
@@ -1236,6 +1982,71 @@ export default function SessionDetail({
   const dataRef = useRef<SessionData | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const [visible, setVisible] = useState(false);
+  const [compacting, setCompacting] = useState(false);
+
+  // ── Swarm state ──────────────────────────────────────
+  const [swarmMode, setSwarmMode] = useState(false);
+  const [swarmPhase, setSwarmPhase] = useState<
+    "idle" | "planning" | "reviewing" | "spawning"
+  >("idle");
+  const [swarmPlannerId, setSwarmPlannerId] = useState<string | null>(null);
+  const [swarmEpicId, setSwarmEpicId] = useState<number | null>(null);
+  const [swarmSubtasks, setSwarmSubtasks] = useState<
+    Array<{ title: string; description: string }>
+  >([]);
+  const [swarmOriginalTask, setSwarmOriginalTask] = useState("");
+  const [swarmError, setSwarmError] = useState<string | null>(null);
+
+  // Refs for swarm state so polling closure always reads latest values
+  const swarmPhaseRef = useRef(swarmPhase);
+  swarmPhaseRef.current = swarmPhase;
+  const swarmPlannerIdRef = useRef(swarmPlannerId);
+  swarmPlannerIdRef.current = swarmPlannerId;
+  const swarmEpicIdRef = useRef(swarmEpicId);
+  swarmEpicIdRef.current = swarmEpicId;
+
+  // Reset swarm state when panel closes or new session
+  useEffect(() => {
+    if (!open) {
+      setSwarmMode(false);
+      setSwarmPhase("idle");
+      setSwarmPlannerId(null);
+      setSwarmEpicId(null);
+      setSwarmSubtasks([]);
+      setSwarmOriginalTask("");
+      setSwarmError(null);
+    }
+  }, [open]);
+
+  // Sync mounted/visible states with open — animate in/out
+  useEffect(() => {
+    if (open) {
+      setMounted(true);
+      // Double rAF: mount with translate-x-full first, then transition to translate-x-0
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          setVisible(true);
+        });
+      });
+    } else {
+      setVisible(false);
+      // Allow close animation to play before unmounting
+      const timer = setTimeout(() => setMounted(false), 200);
+      return () => clearTimeout(timer);
+    }
+  }, [open]);
+
+  // Close on Escape
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onOpenChange(false);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [open, onOpenChange]);
 
   // Keep sessionIdRef in sync
   useEffect(() => {
@@ -1271,67 +2082,169 @@ export default function SessionDetail({
     isDragging.current = false;
   }, []);
 
-  // Send message
-  const sendMessage = useCallback(async () => {
-    const text = inputValue.trim();
-    if (!text || sending) return;
-    if (!sessionId && !newSessionDirectory) return;
-    setSending(true);
-    setInputValue("");
+  // ── Swarm spawn handler ────────────────────────────
+  const handleSwarmSpawn = useCallback(async () => {
+    if (!swarmEpicId || !newSessionDirectory || !boardId) return;
+    setSwarmPhase("spawning");
+    setSwarmError(null);
     try {
-      let sid = sessionId;
-      // Lazy-create session on first message
-      if (!sid && newSessionDirectory) {
-        const createRes = await fetch("/api/sessions", {
+      const res = await fetch("/api/sessions/swarm/spawn", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          directory: newSessionDirectory,
+          board_id: boardId,
+          epic_id: swarmEpicId,
+          subtasks: swarmSubtasks,
+          original_task: swarmOriginalTask,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res
+          .json()
+          .catch(() => ({ error: `HTTP ${res.status}` }));
+        throw new Error(body.error || "Failed to spawn sessions");
+      }
+      // Success — close panel and open swarm status
+      onEpicCreated?.(swarmEpicId);
+      onOpenChange(false);
+    } catch (err) {
+      setSwarmError(
+        err instanceof Error ? err.message : "Failed to spawn sessions",
+      );
+      setSwarmPhase("reviewing"); // Allow retry
+    }
+  }, [
+    swarmEpicId,
+    newSessionDirectory,
+    boardId,
+    swarmSubtasks,
+    swarmOriginalTask,
+    onEpicCreated,
+    onOpenChange,
+  ]);
+
+  // Send message
+  const sendMessage = useCallback(
+    async (text: string) => {
+      if (!text || sending) return;
+      if (!sessionId && !newSessionDirectory) return;
+      setSending(true);
+
+      // ── Swarm mode: start planning instead of normal send ──
+      if (swarmMode && !sessionId && newSessionDirectory && boardId) {
+        try {
+          const res = await fetch("/api/sessions/swarm", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              directory: newSessionDirectory,
+              board_id: boardId,
+              task: text,
+            }),
+          });
+          if (!res.ok) {
+            const body = await res
+              .json()
+              .catch(() => ({ error: `HTTP ${res.status}` }));
+            throw new Error(body.error || "Failed to start swarm");
+          }
+          const data = await res.json();
+          setSwarmPlannerId(data.planner_session_id);
+          setSwarmEpicId(data.epic_id);
+          setSwarmOriginalTask(text);
+          setSwarmPhase("planning");
+          // Switch to the planner session so we can see its messages
+          if (onSessionCreated && data.planner_session_id) {
+            onSessionCreated(data.planner_session_id);
+          }
+          setSending(false);
+          return;
+        } catch (err) {
+          setSending(false);
+          throw err;
+        }
+      }
+
+      try {
+        let sid = sessionId;
+        // Lazy-create session on first message
+        if (!sid && newSessionDirectory) {
+          const createRes = await fetch("/api/sessions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              directory: newSessionDirectory,
+              board_id: boardId,
+            }),
+          });
+          if (!createRes.ok)
+            throw new Error(`Failed to create session: ${createRes.status}`);
+          const newSession = await createRes.json();
+          sid = newSession.id;
+          if (sid) onSessionCreated?.(sid);
+        }
+        if (!sid) return;
+        // Persist agent selection for this session and globally
+        if (selectedAgent) {
+          saveAgentForSession(sid, selectedAgent);
+        }
+        const res = await fetch(`/api/sessions/${sid}/send`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ directory: newSessionDirectory, board_id: boardId }),
+          body: JSON.stringify({ text, agent: selectedAgent || undefined }),
         });
-         if (!createRes.ok) throw new Error(`Failed to create session: ${createRes.status}`);
-         const newSession = await createRes.json();
-         sid = newSession.id;
-         if (sid) onSessionCreated?.(sid);
-      }
-       if (!sid) return;
-       // Persist agent selection for this session and globally
-       if (selectedAgent) {
-         saveAgentForSession(sid, selectedAgent);
-       }
-       const res = await fetch(`/api/sessions/${sid}/send`, {
-         method: "POST",
-         headers: { "Content-Type": "application/json" },
-         body: JSON.stringify({ text, agent: selectedAgent || undefined }),
-       });
-       if (!res.ok) throw new Error(`Failed: ${res.status}`);
-       // Immediately unlock the input after receiving acknowledgment (don't wait for body)
-       setSending(false);
-       // Optimistically show the user's message immediately
-       const optimisticMsg: Message = {
-         id: `temp-${Date.now()}`,
-         role: "user",
-         model: null,
-         agent: null,
-         time_created: Math.floor(Date.now() / 1000),
-         text: text,
-         reasoning: "",
-         tool_calls: [],
-       };
+        if (!res.ok) throw new Error(`Failed: ${res.status}`);
+        // Immediately unlock the input after receiving acknowledgment (don't wait for body)
+        setSending(false);
+        // Optimistically show the user's message immediately
+        const optimisticMsg: Message = {
+          id: `temp-${Date.now()}`,
+          role: "user",
+          model: null,
+          agent: null,
+          time_created: Math.floor(Date.now() / 1000),
+          text: text,
+          reasoning: "",
+          tool_calls: [],
+        };
         setData((prev) => {
-          if (!prev) return { session_id: sid!, title: null, directory: "", model: "", total: 1, context_tokens: 0, messages: [optimisticMsg] };
-          return { ...prev, total: prev.total + 1, messages: [...prev.messages, optimisticMsg] };
-         });
+          if (!prev)
+            return {
+              session_id: sid!,
+              title: null,
+              directory: "",
+              model: "",
+              total: 1,
+              context_tokens: 0,
+              messages: [optimisticMsg],
+            };
+          return {
+            ...prev,
+            total: prev.total + 1,
+            messages: [...prev.messages, optimisticMsg],
+          };
+        });
         totalRef.current = (data?.total || 0) + 1;
         waitingForResponseRef.current = true;
         shouldAutoScroll.current = true;
         isNearBottom.current = true;
-    } catch (err) {
-      console.error("Failed to send message:", err);
-      setInputValue(text);
-      setSending(false);
-    } finally {
-      inputRef.current?.focus();
-    }
-  }, [inputValue, sessionId, sending, selectedAgent, newSessionDirectory, onSessionCreated, boardId]);
+      } catch (err) {
+        console.error("Failed to send message:", err);
+        setSending(false);
+        throw err;
+      }
+    },
+    [
+      sessionId,
+      sending,
+      selectedAgent,
+      newSessionDirectory,
+      onSessionCreated,
+      boardId,
+      data?.total,
+    ],
+  );
 
   // Stop session
   const stopSession = useCallback(async () => {
@@ -1391,27 +2304,27 @@ export default function SessionDetail({
   const loadOlderMessages = useCallback(async () => {
     if (!data || isLoadingMore) return;
     if (!sessionId || activeChildId) return; // Only load for parent session
-    
+
     const alreadyLoaded = data.messages.length;
     if (alreadyLoaded >= data.total) return; // All messages already loaded
-    
+
     setIsLoadingMore(true);
     try {
       // Calculate offset for older messages
       const offset = Math.max(0, data.total - alreadyLoaded - LAST_N);
       const limit = LAST_N;
-      
+
       const res = await fetch(
         `/api/sessions/${sessionId}/messages?limit=${limit}&offset=${offset}`,
       );
       if (!res.ok) throw new Error(`Failed: ${res.status}`);
       const olderData = await res.json();
-      
+
       // Preserve scroll position
       const scrollDelta = scrollRef.current
         ? scrollRef.current.scrollHeight - scrollRef.current.scrollTop
         : 0;
-      
+
       // Prepend older messages
       setData((prev) => {
         if (!prev) return olderData;
@@ -1420,10 +2333,11 @@ export default function SessionDetail({
           messages: [...olderData.messages, ...prev.messages],
         };
       });
-      
+
       // Prevent auto-scroll from firing after prepending
-      prevMessageCountRef.current = data.messages.length + olderData.messages.length;
-      
+      prevMessageCountRef.current =
+        data.messages.length + olderData.messages.length;
+
       // Restore scroll position
       queueMicrotask(() => {
         requestAnimationFrame(() => {
@@ -1454,11 +2368,14 @@ export default function SessionDetail({
   }, []);
 
   // Handle viewing a child session inline
-  const handleViewChild = useCallback((childId: string) => {
-    setActiveChildId(childId);
-    fetchMessages(childId);
-    fetchTodos(childId);
-  }, [fetchMessages, fetchTodos]);
+  const handleViewChild = useCallback(
+    (childId: string) => {
+      setActiveChildId(childId);
+      fetchMessages(childId);
+      fetchTodos(childId);
+    },
+    [fetchMessages, fetchTodos],
+  );
 
   // Handle going back to parent session
   const handleBackToParent = useCallback(() => {
@@ -1468,6 +2385,59 @@ export default function SessionDetail({
       fetchTodos(sessionId);
     }
   }, [sessionId, fetchMessages, fetchTodos]);
+
+  // Compact session context
+  const handleCompact = useCallback(async () => {
+    if (!sessionId || activeChildId || compacting) return;
+    setCompacting(true);
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/compact`, {
+        method: "POST",
+      });
+      if (!res.ok && res.status !== 202) {
+        const body = await res
+          .json()
+          .catch(() => ({ error: `HTTP ${res.status}` }));
+        throw new Error(body.error || `Failed: ${res.status}`);
+      }
+      // Backend returns 202 — compaction runs asynchronously.
+      // Poll until the backend clears the compacting flag.
+      const startTime = Date.now();
+      const MAX_WAIT = 5 * 60 * 1000; // 5 min safety timeout
+      const poll = async () => {
+        try {
+          const statusRes = await fetch(
+            `/api/sessions/${sessionId}/compacting`,
+          );
+          if (statusRes.ok) {
+            const { compacting: stillCompacting } = await statusRes.json();
+            if (!stillCompacting) {
+              // Done!
+              setCompacting(false);
+              toast.success("Session compacted");
+              fetchMessages(sessionId);
+              return;
+            }
+          }
+        } catch {
+          /* retry next tick */
+        }
+        if (Date.now() - startTime > MAX_WAIT) {
+          setCompacting(false);
+          toast.error("Compaction timed out");
+          return;
+        }
+        setTimeout(poll, 2000);
+      };
+      // Start polling after a short initial delay
+      setTimeout(poll, 1500);
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to compact session",
+      );
+      setCompacting(false);
+    }
+  }, [sessionId, activeChildId, compacting, fetchMessages]);
 
   // Fetch child sessions
   const fetchChildren = useCallback(async (sid: string) => {
@@ -1502,7 +2472,7 @@ export default function SessionDetail({
     }
   }, []);
 
-  // Initial load
+  // Initial load — delayed until after sheet animation completes
   useEffect(() => {
     if (!open || (!sessionId && !newSessionDirectory)) {
       setData(null);
@@ -1514,26 +2484,34 @@ export default function SessionDetail({
       setActiveChildId(null);
       return;
     }
-    
+
     // Skip loading when in new session mode (no sessionId yet)
     if (!sessionId) {
       return;
     }
-    
-    // Reset scroll tracking so auto-scroll-to-bottom fires for the new session
-    prevMessageCountRef.current = 0;
-    isNearBottom.current = true;
-    shouldAutoScroll.current = false;
-    
-    const activeSessionId = activeChildId || sessionId;
-    fetchMessages(activeSessionId);
-    fetchTodos(activeSessionId);
-    
-    // Only fetch children and statuses for the parent session
-    if (!activeChildId) {
-      fetchChildren(sessionId);
-      fetchStatuses();
-    }
+
+    // Show skeleton immediately while the sheet animation plays
+    setLoading(true);
+
+    // Delay fetches until after the 200ms slide-in animation finishes
+    const timer = setTimeout(() => {
+      // Reset scroll tracking so auto-scroll-to-bottom fires for the new session
+      prevMessageCountRef.current = 0;
+      isNearBottom.current = true;
+      shouldAutoScroll.current = false;
+
+      const activeSessionId = activeChildId || sessionId;
+      fetchMessages(activeSessionId);
+      fetchTodos(activeSessionId);
+
+      // Only fetch children and statuses for the parent session
+      if (!activeChildId) {
+        fetchChildren(sessionId);
+        fetchStatuses();
+      }
+    }, 250);
+
+    return () => clearTimeout(timer);
   }, [
     sessionId,
     open,
@@ -1606,7 +2584,8 @@ export default function SessionDetail({
           const limits: Record<string, number> = {};
           for (const provider of data.all) {
             // Only process connected providers (or all if connected not specified)
-            if (data.connected && !data.connected.includes(provider.id)) continue;
+            if (data.connected && !data.connected.includes(provider.id))
+              continue;
             for (const [modelId, model] of Object.entries(provider.models)) {
               const ctx = model.limit?.context;
               if (ctx && !limits[modelId]) {
@@ -1628,39 +2607,53 @@ export default function SessionDetail({
     isNearBottom.current = scrollHeight - scrollTop - clientHeight < 150;
   }, []);
 
-   // Compute isBusy at component level (not inside useEffect)
-     // This ensures it's available for JSX rendering and polling interval
-     const activeId = activeChildId || sessionId;
-     
-     // Check if last assistant message has running tool calls (fallback for TUI sessions)
-     const hasRunningToolCall = data && data.messages.length > 0 
-       ? data.messages[data.messages.length - 1].tool_calls?.some(tc => tc.status === "running") || false
-       : false;
+  // Compute isBusy at component level (not inside useEffect)
+  // This ensures it's available for JSX rendering and polling interval
+  const activeId = activeChildId || sessionId;
 
-     const isBusy = activeId 
-       ? (sessionStatuses[activeId]?.type === "busy" || sessionStatuses[activeId]?.type === "retry" || hasRunningToolCall || waitingForResponseRef.current) 
-       : false;
+  // Check if last assistant message has running tool calls (fallback for TUI sessions)
+  const hasRunningToolCall =
+    data && data.messages.length > 0
+      ? data.messages[data.messages.length - 1].tool_calls?.some(
+          (tc) => tc.status === "running",
+        ) || false
+      : false;
 
-     // Pagination: check if we have more messages to load
-     const hasMoreMessages = data ? data.messages.length < data.total : false;
+  const isBusy = activeId
+    ? sessionStatuses[activeId]?.type === "busy" ||
+      sessionStatuses[activeId]?.type === "retry" ||
+      hasRunningToolCall ||
+      waitingForResponseRef.current ||
+      compacting
+    : false;
 
-     // Filter out empty messages for display
-     const visibleMessages = useMemo(() => {
-       if (!data) return [];
-       return data.messages.filter((msg) => 
-         msg.text || msg.reasoning || (msg.tool_calls && msg.tool_calls.length > 0) || (msg.compactions && msg.compactions.length > 0)
-       );
-     }, [data]);
+  // Pagination: check if we have more messages to load
+  const hasMoreMessages = data ? data.messages.length < data.total : false;
 
-     // Setup virtualizer
-     const virtualizer = useVirtualizer({
-       count: visibleMessages.length,
-       getScrollElement: () => scrollRef.current,
-       estimateSize: () => 100,
-       getItemKey: (index) => visibleMessages[index]?.id ?? index,
-       measureElement: typeof window !== "undefined" ? (element) => element?.getBoundingClientRect().height : undefined,
-       overscan: 5,
-     });
+  // Filter out empty messages for display
+  const visibleMessages = useMemo(() => {
+    if (!data) return [];
+    return data.messages.filter(
+      (msg) =>
+        msg.text ||
+        msg.reasoning ||
+        (msg.tool_calls && msg.tool_calls.length > 0) ||
+        (msg.compactions && msg.compactions.length > 0),
+    );
+  }, [data]);
+
+  // Setup virtualizer
+  const virtualizer = useVirtualizer({
+    count: visibleMessages.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 100,
+    getItemKey: (index) => visibleMessages[index]?.id ?? index,
+    measureElement:
+      typeof window !== "undefined"
+        ? (element) => element?.getBoundingClientRect().height
+        : undefined,
+    overscan: 5,
+  });
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -1671,7 +2664,10 @@ export default function SessionDetail({
     // Determine if we should auto-scroll:
     // 1. Always scroll if user explicitly sent a message (shouldAutoScroll flag)
     // 2. Or scroll if new message arrives AND user is near bottom
-    const shouldScroll = shouldAutoScroll.current || (currentMessageCount !== prevMessageCountRef.current && isNearBottom.current);
+    const shouldScroll =
+      shouldAutoScroll.current ||
+      (currentMessageCount !== prevMessageCountRef.current &&
+        isNearBottom.current);
 
     prevMessageCountRef.current = currentMessageCount;
 
@@ -1691,17 +2687,15 @@ export default function SessionDetail({
     }
   }, [data?.messages.length, open, visibleMessages.length, virtualizer]);
 
-    // Compute context limit based on model
-    const modelStr = data
-      ? typeof data.model === "string"
-        ? data.model
-        : (data.model && typeof data.model === "object")
-          ? data.model.modelID || ""
-          : ""
-      : "";
-     const contextLimit = modelContextLimits[modelStr] || 0;
-    const LINE_HEIGHT = 20;
-    const MAX_TEXTAREA_HEIGHT = LINE_HEIGHT * 4 + 16;
+  // Compute context limit based on model
+  const modelStr = data
+    ? typeof data.model === "string"
+      ? data.model
+      : data.model && typeof data.model === "object"
+        ? data.model.modelID || ""
+        : ""
+    : "";
+  const contextLimit = modelContextLimits[modelStr] || 0;
 
   // Realtime polling — refetch last N messages + todos + children
   useEffect(() => {
@@ -1714,7 +2708,7 @@ export default function SessionDetail({
       if (!sessionId) return;
       try {
         const activeSessionId = activeChildId || sessionId;
-        
+
         // Check for new messages
         const countRes = await fetch(
           `/api/sessions/${activeSessionId}/messages?limit=0&offset=0`,
@@ -1787,37 +2781,58 @@ export default function SessionDetail({
                 messages: [...base, ...tailData.messages],
               };
             });
-           }
           }
+        }
 
-          // Also refresh todos
-        const todoRes = await fetch(`/api/opencode/session/${activeSessionId}/todo`);
+        // ── Swarm plan detection via epic API ──────
+        if (swarmPhaseRef.current === "planning" && swarmEpicIdRef.current) {
+          try {
+            const epicRes = await fetch(`/api/epics/${swarmEpicIdRef.current}`);
+            if (epicRes.ok) {
+              const epicData = await epicRes.json();
+              if (epicData.status === "ready" && epicData.plan_subtasks) {
+                setSwarmSubtasks(epicData.plan_subtasks);
+                setSwarmPhase("reviewing");
+              }
+            }
+          } catch {
+            // Will retry on next poll
+          }
+        }
+
+        // Also refresh todos
+        const todoRes = await fetch(
+          `/api/opencode/session/${activeSessionId}/todo`,
+        );
         if (todoRes.ok) {
           const todoData = await todoRes.json();
           setTodos(Array.isArray(todoData) ? todoData : []);
         }
 
-         // Always refresh children and statuses (using parent sessionId)
-         const childRes = await fetch(
-           `/api/opencode/session/${sessionId}/children`,
-         );
-         if (childRes.ok) {
-           const childData = await childRes.json();
-           const sorted = Array.isArray(childData)
-             ? childData.sort(
-                 (a: ChildSession, b: ChildSession) =>
-                   b.time.updated - a.time.updated,
-               )
-             : [];
-           setChildren(sorted);
-         }
+        // Always refresh children and statuses (using parent sessionId)
+        const childRes = await fetch(
+          `/api/opencode/session/${sessionId}/children`,
+        );
+        if (childRes.ok) {
+          const childData = await childRes.json();
+          const sorted = Array.isArray(childData)
+            ? childData.sort(
+                (a: ChildSession, b: ChildSession) =>
+                  b.time.updated - a.time.updated,
+              )
+            : [];
+          setChildren(sorted);
+        }
 
-         const dir = sessionDirRef.current;
-         const statusRes = await fetch(`/api/opencode/session/status` + (dir ? `?directory=${encodeURIComponent(dir)}` : ""));
-         if (statusRes.ok) {
-           const statusData = await statusRes.json();
-           setSessionStatuses(statusData);
-         }
+        const dir = sessionDirRef.current;
+        const statusRes = await fetch(
+          `/api/opencode/session/status` +
+            (dir ? `?directory=${encodeURIComponent(dir)}` : ""),
+        );
+        if (statusRes.ok) {
+          const statusData = await statusRes.json();
+          setSessionStatuses(statusData);
+        }
       } catch {
         // next poll will retry
       }
@@ -1834,14 +2849,21 @@ export default function SessionDetail({
     es.onmessage = (event) => {
       try {
         const eventData = JSON.parse(event.data);
-        if (eventData.type === "opencode_session_status" && eventData.sessionID) {
+        if (
+          eventData.type === "opencode_session_status" &&
+          eventData.sessionID
+        ) {
           // Update session status immediately without waiting for poll
           setSessionStatuses((prev) => ({
             ...prev,
             [eventData.sessionID]: eventData.status,
           }));
           const activeId = activeChildId || sessionId;
-          if (eventData.sessionID === activeId && eventData.status?.type !== "busy" && eventData.status?.type !== "retry") {
+          if (
+            eventData.sessionID === activeId &&
+            eventData.status?.type !== "busy" &&
+            eventData.status?.type !== "retry"
+          ) {
             waitingForResponseRef.current = false;
           }
         }
@@ -1866,15 +2888,15 @@ export default function SessionDetail({
     const lastMsg = data.messages[data.messages.length - 1];
     if (!lastMsg) return;
     if (lastMsg.role === "assistant") {
-      const hasRunning = lastMsg.tool_calls?.some(tc => tc.status === "running") || false;
+      const hasRunning =
+        lastMsg.tool_calls?.some((tc) => tc.status === "running") || false;
       if (!hasRunning) {
         waitingForResponseRef.current = false;
       }
     }
   }, [data]);
 
-
-  if (!open) return null;
+  if (!mounted) return null;
 
   return (
     <>
@@ -1887,7 +2909,9 @@ export default function SessionDetail({
       `}</style>
       {/* Backdrop */}
       <div
-        className="fixed inset-0 z-40 bg-black/50"
+        className={cn(
+          "fixed inset-0 z-40 bg-black/50 transition-opacity duration-200",
+          visible ? "opacity-100" : "opacity-0",        )}
         onClick={() => onOpenChange(false)}
       />
 
@@ -1897,7 +2921,8 @@ export default function SessionDetail({
         style={{ width: `${width}px` }}
         className={cn(
           "fixed top-0 right-0 z-50 h-full bg-background border-l shadow-lg flex flex-col",
-          "animate-in slide-in-from-right duration-200",
+          "transition-transform duration-200 ease-in-out",
+          visible ? "translate-x-0" : "translate-x-full",
         )}
       >
         {/* Resize Handle */}
@@ -1929,7 +2954,9 @@ export default function SessionDetail({
                   const activeChild = activeChildId
                     ? children.find((c) => c.id === activeChildId)
                     : null;
-                  return activeChild ? activeChild.title : (data?.title || "Untitled Session");
+                  return activeChild
+                    ? activeChild.title
+                    : data?.title || "Untitled Session";
                 })()}
               </h2>
             </div>
@@ -1940,7 +2967,9 @@ export default function SessionDetail({
                     className="text-[10px] text-muted-foreground/40 font-mono truncate w-fit hover:text-muted-foreground transition-colors cursor-pointer text-left"
                     onClick={async () => {
                       try {
-                        await navigator.clipboard.writeText(activeChildId || sessionId || "");
+                        await navigator.clipboard.writeText(
+                          activeChildId || sessionId || "",
+                        );
                         toast.success("Session ID copied");
                       } catch {}
                     }}
@@ -1948,23 +2977,51 @@ export default function SessionDetail({
                     {activeChildId || sessionId}
                   </button>
                 </TooltipTrigger>
-                <TooltipContent side="bottom" sideOffset={4} className="text-xs">
+                <TooltipContent
+                  side="bottom"
+                  sideOffset={4}
+                  className="text-xs"
+                >
                   Click to copy session ID
                 </TooltipContent>
               </Tooltip>
             )}
           </div>
-           <div className="flex items-center gap-2">
-             {sessionId && (
-               <Button
-                 variant="ghost"
-                 size="sm"
-                 onClick={() => setConfirmDelete(true)}
-                 className="h-6 w-6 p-0"
-               >
-                 <Trash2 className="w-4 h-4" />
-               </Button>
-             )}
+          <div className="flex items-center gap-2">
+            {sessionId && !activeChildId && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleCompact}
+                    disabled={compacting}
+                    className="h-6 w-6 p-0"
+                  >
+                    <Shrink
+                      className={cn("w-4 h-4", compacting && "animate-spin")}
+                    />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent
+                  side="bottom"
+                  sideOffset={4}
+                  className="text-xs"
+                >
+                  Compact session context
+                </TooltipContent>
+              </Tooltip>
+            )}
+            {sessionId && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setConfirmDelete(true)}
+                className="h-6 w-6 p-0"
+              >
+                <Trash2 className="w-4 h-4" />
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"
@@ -1979,7 +3036,7 @@ export default function SessionDetail({
         {/* Messages */}
         <div
           ref={scrollRef}
-          className="flex-1 overflow-y-auto overflow-x-hidden"
+          className="flex-1 flex flex-col min-h-0 overflow-y-auto overflow-x-hidden"
           onScroll={handleScroll}
         >
           {loading && !data ? (
@@ -2000,285 +3057,253 @@ export default function SessionDetail({
                     disabled={isLoadingMore}
                     className="text-xs px-3 py-1.5 rounded-md bg-muted/50 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {isLoadingMore ? "Loading…" : `Load older messages (${data.total - data.messages.length} more)`}
+                    {isLoadingMore
+                      ? "Loading…"
+                      : `Load older messages (${data.total - data.messages.length} more)`}
                   </button>
                 </div>
               )}
-              
+
               {/* Virtualized message list */}
-              <div style={{ height: `${virtualizer.getTotalSize()}px`, width: "100%", position: "relative" }}>
+              <div
+                style={{
+                  height: `${virtualizer.getTotalSize()}px`,
+                  width: "100%",
+                  position: "relative",
+                }}
+              >
                 {virtualizer.getVirtualItems().map((virtualRow) => {
                   const msg = visibleMessages[virtualRow.index];
                   const msgIndex = data.messages.indexOf(msg);
-                  const prevMsg = msgIndex > 0 ? data.messages[msgIndex - 1] : undefined;
-                  const nextMsg = msgIndex < data.messages.length - 1 ? data.messages[msgIndex + 1] : undefined;
+                  const prevMsg =
+                    msgIndex > 0 ? data.messages[msgIndex - 1] : undefined;
+                  const nextMsg =
+                    msgIndex < data.messages.length - 1
+                      ? data.messages[msgIndex + 1]
+                      : undefined;
                   const isLast = msgIndex === data.messages.length - 1;
 
-                   return (
-                     <div
-                       key={msg.id || virtualRow.index}
-                       data-index={virtualRow.index}
-                       ref={virtualizer.measureElement}
-                       style={{
-                         position: "absolute",
-                         top: 0,
-                         left: 0,
-                         width: "100%",
-                         transform: `translateY(${virtualRow.start}px)`,
-                       }}
-                     >
-                       <MessageRow
-                         msg={msg}
-                         prevMsg={prevMsg}
-                         nextMsg={nextMsg}
-                         isLast={isLast}
-                         sessionStatuses={sessionStatuses}
-                         children={children}
-                         onViewChild={handleViewChild}
-                         sessionId={activeChildId || sessionId || ""}
-                         directory={data?.directory ?? null}
-                         onAnswerSubmitted={() => {
-                           // Trigger a poll to refresh messages
-                           waitingForResponseRef.current = true;
-                           shouldAutoScroll.current = true;
-                           isNearBottom.current = true;
-                         }}
-                       />
+                  return (
+                    <div
+                      key={msg.id || virtualRow.index}
+                      data-index={virtualRow.index}
+                      ref={virtualizer.measureElement}
+                      style={{
+                        position: "absolute",
+                        top: 0,
+                        left: 0,
+                        width: "100%",
+                        transform: `translateY(${virtualRow.start}px)`,
+                      }}
+                    >
+                      <MessageRow
+                        msg={msg}
+                        prevMsg={prevMsg}
+                        nextMsg={nextMsg}
+                        isLast={isLast}
+                        sessionStatuses={sessionStatuses}
+                        children={children}
+                        onViewChild={handleViewChild}
+                        sessionId={activeChildId || sessionId || ""}
+                        directory={data?.directory ?? null}
+                        onAnswerSubmitted={() => {
+                          // Trigger a poll to refresh messages
+                          waitingForResponseRef.current = true;
+                          shouldAutoScroll.current = true;
+                          isNearBottom.current = true;
+                        }}
+                      />
                     </div>
                   );
                 })}
               </div>
             </>
-           ) : (
-            <div className="p-4 text-sm text-muted-foreground">
-              {isNewSession ? "Start a conversation…" : "No messages yet"}
+          ) : (
+            <div className="flex-1 flex items-center justify-center">
+              <div className="text-center">
+                {isNewSession ? (
+                  <>
+                    <div className="mb-3">
+                      <Sparkles className="w-10 h-10 text-muted-foreground/30 mx-auto" />
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      What can I help you with?
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <div className="mb-3">
+                      <MessageCircle className="w-10 h-10 text-muted-foreground/30 mx-auto" />
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      No messages yet
+                    </p>
+                  </>
+                )}
+              </div>
             </div>
           )}
         </div>
+
+        {/* ── Swarm Review Panel ──────────────────── */}
+        {swarmPhase === "reviewing" && swarmSubtasks.length > 0 && (
+          <div className="border-t flex-shrink-0 bg-amber-500/5 border-amber-500/20">
+            <div className="px-4 py-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold">
+                  Swarm Plan — {swarmSubtasks.length} subtasks
+                </h3>
+                <Badge
+                  variant="secondary"
+                  className="text-[10px] bg-amber-500/15 text-amber-600 border-0"
+                >
+                  🐝 Swarm
+                </Badge>
+              </div>
+              <div className="space-y-2 max-h-60 overflow-y-auto">
+                {swarmSubtasks.map((subtask, i) => (
+                  <div key={i} className="flex gap-2 text-xs">
+                    <span className="font-mono font-bold text-amber-600 shrink-0 w-5">
+                      {i + 1}.
+                    </span>
+                    <div className="min-w-0">
+                      <p className="font-medium">{subtask.title}</p>
+                      <p className="text-muted-foreground line-clamp-2">
+                        {subtask.description}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {swarmError && (
+                <p className="text-xs text-destructive">{swarmError}</p>
+              )}
+              <div className="flex items-center gap-2 pt-1">
+                <Button
+                  size="sm"
+                  className="bg-amber-500 hover:bg-amber-600 text-white text-xs"
+                  onClick={handleSwarmSpawn}
+                >
+                  🐝 Spawn {swarmSubtasks.length} Sessions
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs text-muted-foreground"
+                  onClick={() => {
+                    setSwarmPhase("idle");
+                    setSwarmSubtasks([]);
+                    setSwarmError(null);
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Swarm planning/spawning indicator */}
+        {(swarmPhase === "planning" || swarmPhase === "spawning") && (
+          <div className="border-t flex-shrink-0 bg-purple-500/5 border-purple-500/20 px-4 py-3 flex items-center gap-2">
+            <Loader2 className="w-4 h-4 animate-spin text-purple-500" />
+            <span className="text-xs text-purple-600">
+              {swarmPhase === "planning"
+                ? "Planning task decomposition…"
+                : "Creating sessions…"}
+            </span>
+            {swarmPhase === "planning" && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-xs text-muted-foreground ml-auto"
+                onClick={() => {
+                  setSwarmPhase("idle");
+                  setSwarmMode(false);
+                  setSwarmError(null);
+                }}
+              >
+                Cancel
+              </Button>
+            )}
+          </div>
+        )}
 
         {/* Todos + Message Input */}
         <div className="border-t flex-shrink-0">
           {/* Todos */}
           <TodoPanel todos={todos} />
-            {/* Input section — only for parent session */}
-             {!activeChildId && (
-               <div className="px-4 pt-3 pb-3">
-                 {/* Input container with all elements inside */}
-                 <div className="relative bg-input rounded-md">
-                   <textarea
-                     ref={inputRef}
-                     value={inputValue}
-                     onChange={(e) => {
-                       setInputValue(e.target.value);
-                       const el = e.target;
-                       el.style.height = "auto";
-                       el.style.height = `${Math.min(el.scrollHeight, MAX_TEXTAREA_HEIGHT)}px`;
-                     }}
-                     onKeyDown={(e) => {
-                       if (e.key === "Enter" && !e.shiftKey) {
-                         e.preventDefault();
-                         sendMessage();
-                       }
-                       if (e.key === "Tab" && agents.length > 1) {
-                         e.preventDefault();
-                         const currentIdx = agents.findIndex((a) => a.name === selectedAgent);
-                         const nextIdx = (currentIdx + 1) % agents.length;
-                         setSelectedAgent(agents[nextIdx].name);
-                       }
-                     }}
-                     onFocus={() => {
-                       if (inputRef.current && inputRef.current.value !== inputValue) {
-                         setInputValue("");
-                         inputRef.current.value = "";
-                       }
-                     }}
-                     placeholder="Send a message…"
-                     rows={1}
-                     autoComplete="off"
-                     autoCorrect="off"
-                     autoCapitalize="off"
-                     spellCheck={false}
-                     data-gramm="false"
-                     data-gramm_editor="false"
-                     className={cn(
-                       "w-full resize-none rounded-md border-0 bg-transparent px-3 py-2 text-sm text-white placeholder:text-muted-foreground outline-none focus:ring-0 min-h-[36px] disabled:opacity-50",
-                       isBusy && "pr-10"
-                     )}
-                   />
-                   
-                   {/* Stop button — top right, inside textarea */}
-                   {isBusy && (
-                     <button
-                       onClick={() => stopSession()}
-                       className="absolute top-2 right-2 text-muted-foreground hover:text-destructive transition-colors"
-                     >
-                       <Square className="w-3.5 h-3.5 fill-current" />
-                     </button>
-                   )}
-                   
-                   {/* Loading bar — bottom of textarea */}
-                   {isBusy && (
-                     <div className="absolute bottom-0 left-0 right-0 h-[2px] rounded-b-md overflow-hidden">
-                       <div
-                         className="h-full bg-primary/60"
-                         style={{ animation: "loading-bar 2s ease-in-out infinite" }}
-                       />
-                     </div>
-                   )}
+          {/* Input section — only for parent session */}
+          {!activeChildId && (
+            <ChatInput
+              sending={sending}
+              isBusy={isBusy}
+              agents={agents}
+              selectedAgent={selectedAgent}
+              onAgentChange={setSelectedAgent}
+              onSend={sendMessage}
+              onStop={stopSession}
+              contextTokens={data?.context_tokens || 0}
+              contextLimit={contextLimit}
+              modelName={modelStr}
+              sessionId={sessionId}
+              onClose={() => onOpenChange(false)}
+              data={data}
+              directory={data?.directory ?? null}
+              isSwarmAvailable={isNewSession && !!boardId}
+              swarmEnabled={swarmMode}
+              onSwarmToggle={setSwarmMode}
+            />
+          )}
+        </div>
+      </div>
 
-                   {/* Bottom bar INSIDE the input container */}
-                   <div className="flex items-center justify-between px-3 py-2 border-t border-muted-foreground/10 text-xs text-muted-foreground">
-                     {/* Left side: mode indicator + TAB icon */}
-                     <div className="flex items-center gap-2">
-                       {agents.length > 0 && (
-                         <div className="flex items-center gap-1.5">
-                           <span>{toCamelCase(selectedAgent)}</span>
-                           <kbd className="inline-flex items-center justify-center h-5 w-5 rounded border border-muted-foreground/30 bg-muted/20 text-[10px] font-mono">
-                             ⇥
-                           </kbd>
-                         </div>
-                       )}
-                     </div>
-                     
-                     {/* Right side: context tokens + model name + Done button */}
-                     <div className="flex items-center gap-2">
-                       {data && (() => {
-                         const used = data.context_tokens || 0;
-                         const limit = contextLimit;
-                         const ratio = limit > 0 ? Math.min(used / limit, 1) : 0;
-                         const pct = Math.round(ratio * 100);
-                         const circumference = 2 * Math.PI * 6;
-                         return (
-                           <Tooltip>
-                             <TooltipTrigger asChild>
-                               <div className="flex items-center gap-1.5 cursor-default">
-                                 <svg width="16" height="16" viewBox="0 0 16 16" className="shrink-0 -rotate-90">
-                                   <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="2" className="text-muted-foreground/20" />
-                                   <circle
-                                     cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="2"
-                                     strokeDasharray={circumference}
-                                     strokeDashoffset={circumference * (1 - ratio)}
-                                     strokeLinecap="round"
-                                     className={cn(
-                                       ratio > 0.9
-                                         ? "text-red-500"
-                                         : ratio > 0.75
-                                           ? "text-yellow-500"
-                                           : "text-primary"
-                                     )}
-                                   />
-                                 </svg>
-                                 <span className="tabular-nums">
-                                   {formatTokenCount(used)}
-                                   {limit > 0 && `/${formatTokenCount(limit)}`}
-                                 </span>
-                               </div>
-                             </TooltipTrigger>
-                             <TooltipContent side="top" sideOffset={6} className="text-xs">
-                               {formatTokenCount(used)}{limit > 0 ? ` / ${formatTokenCount(limit)}` : ""} used{limit > 0 ? ` (${pct}%)` : ""}
-                             </TooltipContent>
-                           </Tooltip>
-                         );
-                       })()}
-                       {data && (() => {
-                         const displayName = getModelDisplayName(modelStr);
-                         return displayName ? <span className="truncate text-xs">{displayName}</span> : null;
-                        })()}
-                       {sessionId && (
-                         <Popover>
-                           <PopoverTrigger asChild>
-                             <Button
-                               variant="ghost"
-                               size="sm"
-                               className="h-5 text-xs text-muted-foreground hover:text-foreground px-1.5 py-0"
-                               disabled={sending}
-                             >
-                               Done
-                             </Button>
-                           </PopoverTrigger>
-                           <PopoverContent
-                             side="top"
-                             sideOffset={8}
-                             align="end"
-                             className="w-auto p-3 rounded-lg bg-popover border"
-                           >
-                             <div className="space-y-3">
-                               <p className="text-xs text-muted-foreground">Mark session as done?</p>
-                               <div className="flex items-center justify-end gap-2">
-                                 <PopoverClose asChild>
-                                   <Button variant="ghost" size="sm" className="h-7 text-xs">
-                                     Cancel
-                                   </Button>
-                                 </PopoverClose>
-                                 <Button
-                                   size="sm"
-                                   variant="destructive"
-                                   className="h-7 text-xs"
-                                   onClick={async () => {
-                                     try {
-                                       const res = await fetch(`/api/sessions/${sessionId}/complete`, { method: "POST" });
-                                       if (res.ok) onOpenChange(false);
-                                     } catch (err) {
-                                       console.error("Failed to mark session complete:", err);
-                                     }
-                                   }}
-                                 >
-                                   Confirm
-                                 </Button>
-                               </div>
-                             </div>
-                           </PopoverContent>
-                         </Popover>
-                       )}
-                     </div>
-                   </div>
-                  </div>
-                </div>
-               )}
-           </div>
-         </div>
-
-       {/* Delete confirmation dialog */}
-       {confirmDelete && ReactDOM.createPortal(
-         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50">
-           <div className="bg-popover text-popover-foreground rounded-lg border p-4 shadow-lg max-w-sm mx-4 space-y-3">
-             <h3 className="font-semibold text-sm">Delete session</h3>
-             <p className="text-sm text-muted-foreground">
-               Permanently delete this session and all its messages? This cannot be undone.
-             </p>
-             <div className="flex justify-end gap-2">
-               <Button
-                 variant="outline"
-                 size="sm"
-                 onClick={() => setConfirmDelete(false)}
-               >
-                 Cancel
-               </Button>
-               <Button
-                 variant="destructive"
-                 size="sm"
-                 onClick={async () => {
-                   try {
-                     const response = await fetch(`/api/sessions/${sessionId}`, { method: "DELETE" });
-                     if (response.ok) {
-                       toast.success("Session deleted");
-                       setConfirmDelete(false);
-                       onOpenChange(false);
-                     } else {
-                       toast.error("Failed to delete session");
-                     }
-                   } catch (error) {
-                     toast.error("Error deleting session");
-                   }
-                 }}
-               >
-                 Delete
-               </Button>
-             </div>
-           </div>
-         </div>,
-         document.body
-       )}
-       </>
-     );
-   }
+      {/* Delete confirmation dialog */}
+      {confirmDelete &&
+        ReactDOM.createPortal(
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50">
+            <div className="bg-popover text-popover-foreground rounded-lg border p-4 shadow-lg max-w-sm mx-4 space-y-3">
+              <h3 className="font-semibold text-sm">Delete session</h3>
+              <p className="text-sm text-muted-foreground">
+                Permanently delete this session and all its messages? This
+                cannot be undone.
+              </p>
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setConfirmDelete(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={async () => {
+                    try {
+                      const response = await fetch(
+                        `/api/sessions/${sessionId}`,
+                        { method: "DELETE" },
+                      );
+                      if (response.ok) {
+                        toast.success("Session deleted");
+                        setConfirmDelete(false);
+                        onOpenChange(false);
+                      } else {
+                        toast.error("Failed to delete session");
+                      }
+                    } catch (error) {
+                      toast.error("Error deleting session");
+                    }
+                  }}
+                >
+                  Delete
+                </Button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+}

@@ -1,24 +1,32 @@
 import { useState, useEffect, useCallback } from "react";
-import { Loader2, RotateCcw, Settings, Shrink, ToggleLeft, ToggleRight } from "lucide-react";
+import { Loader2, RotateCcw, Shrink, ToggleLeft, ToggleRight, Brain, Bell, BellOff } from "lucide-react";
 import { toast } from "sonner";
+import { requestNotificationPermission, getNotificationPermissionStatus } from "@/lib/desktop-notifications";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 
 interface GeneralSettingsData {
   auto_compact_enabled: boolean;
   auto_compact_threshold: number;
+  memories_enabled: boolean;
+  memories_auto_prune_days: number;
+  memories_keep_important: boolean;
+  desktop_notifications_enabled: boolean;
 }
 
 const DEFAULTS: GeneralSettingsData = {
   auto_compact_enabled: true,
   auto_compact_threshold: 80,
+  memories_enabled: true,
+  memories_auto_prune_days: 90,
+  memories_keep_important: true,
+  desktop_notifications_enabled: false,
 };
 
 export default function SettingsGeneralTab() {
   const [settings, setSettings] = useState<GeneralSettingsData>(DEFAULTS);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [dirty, setDirty] = useState(false);
   const [reloading, setReloading] = useState(false);
 
   // Fetch settings on mount
@@ -44,6 +52,21 @@ export default function SettingsGeneralTab() {
           auto_compact_threshold: map.auto_compact_threshold
             ? parseInt(map.auto_compact_threshold, 10)
             : DEFAULTS.auto_compact_threshold,
+          memories_enabled:
+            map.memories_enabled !== undefined
+              ? map.memories_enabled === "true" || map.memories_enabled === "1"
+              : DEFAULTS.memories_enabled,
+          memories_auto_prune_days: map.memories_auto_prune_days
+            ? parseInt(map.memories_auto_prune_days, 10)
+            : DEFAULTS.memories_auto_prune_days,
+          memories_keep_important:
+            map.memories_keep_important !== undefined
+              ? map.memories_keep_important === "true" || map.memories_keep_important === "1"
+              : DEFAULTS.memories_keep_important,
+          desktop_notifications_enabled:
+            map.desktop_notifications_enabled !== undefined
+              ? map.desktop_notifications_enabled === "true" || map.desktop_notifications_enabled === "1"
+              : DEFAULTS.desktop_notifications_enabled,
         });
       } catch (err) {
         toast.error("Failed to load settings");
@@ -54,37 +77,55 @@ export default function SettingsGeneralTab() {
     fetchSettings();
   }, []);
 
-  const handleToggle = useCallback((field: keyof GeneralSettingsData) => {
-    setSettings((prev) => ({ ...prev, [field]: !prev[field] }));
-    setDirty(true);
-  }, []);
-
-  const handleThresholdChange = useCallback((value: number) => {
-    const clamped = Math.max(0, Math.min(100, value));
-    setSettings((prev) => ({ ...prev, auto_compact_threshold: clamped }));
-    setDirty(true);
-  }, []);
-
-  const handleSave = useCallback(async () => {
+  const saveSettings = useCallback(async (newSettings: GeneralSettingsData) => {
     setSaving(true);
     try {
       const res = await fetch("/api/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          auto_compact_enabled: String(settings.auto_compact_enabled),
-          auto_compact_threshold: String(settings.auto_compact_threshold),
+          auto_compact_enabled: String(newSettings.auto_compact_enabled),
+          auto_compact_threshold: String(newSettings.auto_compact_threshold),
+          memories_enabled: String(newSettings.memories_enabled),
+          memories_auto_prune_days: String(newSettings.memories_auto_prune_days),
+          memories_keep_important: String(newSettings.memories_keep_important),
+          desktop_notifications_enabled: String(newSettings.desktop_notifications_enabled),
         }),
       });
       if (!res.ok) throw new Error(`Failed: ${res.status}`);
-      setDirty(false);
       toast.success("Settings saved");
     } catch {
       toast.error("Failed to save settings");
     } finally {
       setSaving(false);
     }
-  }, [settings]);
+  }, []);
+
+  const handleToggle = useCallback((field: keyof GeneralSettingsData) => {
+    setSettings((prev) => {
+      const next = { ...prev, [field]: !prev[field] };
+      saveSettings(next);
+      return next;
+    });
+  }, [saveSettings]);
+
+  const handleThresholdChange = useCallback((value: number) => {
+    const clamped = Math.max(0, Math.min(100, value));
+    setSettings((prev) => {
+      const next = { ...prev, auto_compact_threshold: clamped };
+      saveSettings(next);
+      return next;
+    });
+  }, [saveSettings]);
+
+  const handlePruneDaysChange = useCallback((value: number) => {
+    const clamped = Math.max(1, Math.min(365, value));
+    setSettings((prev) => {
+      const next = { ...prev, memories_auto_prune_days: clamped };
+      saveSettings(next);
+      return next;
+    });
+  }, [saveSettings]);
 
   const handleReload = useCallback(async () => {
     setReloading(true);
@@ -112,22 +153,6 @@ export default function SettingsGeneralTab() {
 
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div className="flex items-center justify-between gap-3">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <Settings className="h-4 w-4" />
-            <h3 className="text-sm font-semibold">General</h3>
-          </div>
-          <p className="text-xs text-muted-foreground max-w-md">
-            Configure workspace behavior and automation settings.
-          </p>
-        </div>
-        <Button size="sm" disabled={!dirty || saving} onClick={handleSave}>
-          {saving ? "Saving…" : "Save"}
-        </Button>
-      </div>
-
       {/* Auto-Compaction Card */}
       <div className="rounded-lg border bg-card p-4 space-y-4">
         <div className="flex items-center justify-between gap-2">
@@ -203,6 +228,79 @@ export default function SettingsGeneralTab() {
         )}
       </div>
 
+      {/* Memories Card */}
+      <div className="rounded-lg border bg-card p-4 space-y-4">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Brain className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm font-semibold">Memories</span>
+          </div>
+          <Button
+            variant={settings.memories_enabled ? "secondary" : "ghost"}
+            size="icon"
+            onClick={() => handleToggle("memories_enabled")}
+            title={settings.memories_enabled ? "Disable" : "Enable"}
+            className="h-8 w-8"
+          >
+            {settings.memories_enabled ? (
+              <ToggleRight className="h-3.5 w-3.5" />
+            ) : (
+              <ToggleLeft className="h-3.5 w-3.5" />
+            )}
+          </Button>
+        </div>
+
+        <p className="text-xs text-muted-foreground">
+          Memories persist agent context across sessions. Conversation decisions,
+          findings, patterns, and errors are saved and searchable.
+        </p>
+
+        {/* Auto-prune slider */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-medium text-muted-foreground">
+              Auto-prune after
+            </label>
+            <span className="text-xs font-mono tabular-nums">
+              {settings.memories_auto_prune_days} days
+            </span>
+          </div>
+          <input
+            type="range"
+            min={1}
+            max={365}
+            step={1}
+            value={settings.memories_auto_prune_days}
+            onChange={(e) => handlePruneDaysChange(parseInt(e.target.value, 10))}
+            disabled={!settings.memories_enabled}
+            className="w-full h-1.5 rounded-full appearance-none bg-muted cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed accent-primary"
+          />
+          <div className="flex justify-between text-[10px] text-muted-foreground">
+            <span>30 days</span>
+            <span>180 days</span>
+            <span>365 days</span>
+          </div>
+        </div>
+
+        {/* Keep important memories checkbox */}
+        <div className="pt-2 border-t">
+          <button
+            onClick={() => handleToggle("memories_keep_important")}
+            disabled={!settings.memories_enabled}
+            className="flex items-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed hover:text-foreground transition-colors text-muted-foreground"
+          >
+            <input
+              type="checkbox"
+              checked={settings.memories_keep_important}
+              onChange={() => {}}
+              disabled={!settings.memories_enabled}
+              className="h-3.5 w-3.5 rounded border border-muted-foreground cursor-pointer"
+            />
+            <span className="text-xs font-medium">Keep important memories</span>
+          </button>
+        </div>
+      </div>
+
       {/* Backend Card */}
       <div className="rounded-lg border bg-card p-4 space-y-3">
         <div className="flex items-center gap-2">
@@ -234,6 +332,61 @@ export default function SettingsGeneralTab() {
             </>
           )}
         </Button>
+      </div>
+
+      {/* Desktop Notifications Card */}
+      <div className="rounded-lg border bg-card p-4 space-y-4">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            {settings.desktop_notifications_enabled ? (
+              <Bell className="h-4 w-4 text-muted-foreground" />
+            ) : (
+              <BellOff className="h-4 w-4 text-muted-foreground" />
+            )}
+            <span className="text-sm font-semibold">Desktop Notifications</span>
+          </div>
+          <Button
+            variant={settings.desktop_notifications_enabled ? "secondary" : "ghost"}
+            size="icon"
+            onClick={async () => {
+              if (!settings.desktop_notifications_enabled) {
+                const perm = await requestNotificationPermission();
+                if (perm === "granted") {
+                  handleToggle("desktop_notifications_enabled");
+                } else {
+                  toast.error("Notification permission denied. Enable it in your browser settings.");
+                }
+              } else {
+                handleToggle("desktop_notifications_enabled");
+              }
+            }}
+            title={settings.desktop_notifications_enabled ? "Disable" : "Enable"}
+            className="h-8 w-8"
+          >
+            {settings.desktop_notifications_enabled ? (
+              <ToggleRight className="h-3.5 w-3.5" />
+            ) : (
+              <ToggleLeft className="h-3.5 w-3.5" />
+            )}
+          </Button>
+        </div>
+
+        <p className="text-xs text-muted-foreground">
+          Show browser desktop notifications when a task finishes its work
+          iteration. The browser will prompt for permission when you enable this
+          feature.
+        </p>
+
+        {getNotificationPermissionStatus() === "unsupported" && (
+          <p className="text-xs text-amber-500">
+            Your browser does not support desktop notifications.
+          </p>
+        )}
+        {settings.desktop_notifications_enabled && getNotificationPermissionStatus() === "denied" && (
+          <p className="text-xs text-amber-500">
+            Notifications are blocked. Please enable them in your browser settings.
+          </p>
+        )}
       </div>
 
       {/* Info box */}

@@ -1,6 +1,7 @@
 import { WebSocketServer, WebSocket } from "ws";
 import * as pty from "@lydell/node-pty";
 import os from "os";
+import { getBoard } from "./db.js";
 const MAX_BUFFER = 500; // keep last 500 output chunks for reconnect
 export function setupTerminalServer(server) {
     const wss = new WebSocketServer({ noServer: true });
@@ -11,11 +12,26 @@ export function setupTerminalServer(server) {
         if (session)
             return session;
         const shellCwd = cwd || os.homedir();
-        const shellProcess = pty.spawn("/bin/zsh", [], {
+        const env = { ...process.env };
+        const essentialPaths = [
+            `${os.homedir()}/.local/bin`,
+            "/opt/homebrew/bin",
+            "/opt/homebrew/sbin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+        ];
+        const currentPaths = (env.PATH || "").split(":");
+        const mergedPaths = [...new Set([...essentialPaths, ...currentPaths])];
+        env.PATH = mergedPaths.join(":");
+        const shellProcess = pty.spawn("/bin/zsh", ["-l"], {
             name: "xterm-256color",
             cols: 80,
             rows: 24,
             cwd: shellCwd,
+            env,
         });
         session = {
             process: shellProcess,
@@ -38,8 +54,16 @@ export function setupTerminalServer(server) {
                 }
             }
         });
-        // If PTY exits (e.g. user typed `exit`), clean up
+        // If PTY exits (e.g. user typed `exit`), notify clients and clean up
         shellProcess.onExit(() => {
+            for (const socket of session.sockets) {
+                try {
+                    if (socket.readyState === WebSocket.OPEN) {
+                        socket.send(JSON.stringify({ type: "exited" }));
+                    }
+                }
+                catch { }
+            }
             sessions.delete(boardId);
         });
         return session;
@@ -85,7 +109,9 @@ export function setupTerminalServer(server) {
                 return;
             }
             const sessionId = `${boardId}:${splitId}`;
-            const session = getSession(sessionId);
+            const board = getBoard(parseInt(boardId, 10));
+            const boardCwd = board?.repo_path || undefined;
+            const session = getSession(sessionId, boardCwd);
             // Send buffered output so the reconnecting client sees history
             for (const chunk of session.buffer) {
                 ws.send(JSON.stringify({ type: "output", data: chunk }));

@@ -2,9 +2,6 @@ import { Bot, BotMessageSquare, FlaskConical, Settings } from "lucide-react";
 import {
   Dialog,
   DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
 } from "@/components/ui/dialog";
 import {
   Tabs,
@@ -36,8 +33,10 @@ export default function SettingsDialog({ open, onOpenChange }: SettingsDialogPro
     agentFileExists,
     dirtyFiles,
     saving,
+    deleting,
     handleContentChange,
     handleSave,
+    handleDelete,
   } = useAgentsData();
 
   const content = loading ? (
@@ -48,11 +47,7 @@ export default function SettingsDialog({ open, onOpenChange }: SettingsDialogPro
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl max-h-[85vh] flex flex-col">
-        <DialogHeader>
-          <DialogTitle>Settings</DialogTitle>
-          <DialogDescription>Configure your workspace</DialogDescription>
-        </DialogHeader>
+      <DialogContent className="sm:max-w-2xl h-[85vh] flex flex-col">
         <Tabs defaultValue="general" className="flex-1 min-h-0">
           <TabsList variant="line">
             <TabsTrigger value="general">
@@ -72,10 +67,10 @@ export default function SettingsDialog({ open, onOpenChange }: SettingsDialogPro
               Experimental
             </TabsTrigger>
           </TabsList>
-          <TabsContent value="general" className="overflow-y-auto max-h-[calc(85vh-8rem)] mt-4">
+          <TabsContent value="general" className="flex-1 min-h-0 overflow-y-auto mt-4">
             <SettingsGeneralTab />
           </TabsContent>
-          <TabsContent value="agents" className="overflow-y-auto max-h-[calc(85vh-8rem)] mt-4">
+          <TabsContent value="agents" className="flex-1 min-h-0 overflow-y-auto mt-4">
             {content ?? (
               <AgentsList
                 agents={primaryAgents}
@@ -83,12 +78,14 @@ export default function SettingsDialog({ open, onOpenChange }: SettingsDialogPro
                 agentFileExists={agentFileExists}
                 dirtyFiles={dirtyFiles}
                 saving={saving}
+                deleting={deleting}
                 onContentChange={handleContentChange}
                 onSave={handleSave}
+                onDelete={handleDelete}
               />
             )}
           </TabsContent>
-          <TabsContent value="subagents" className="overflow-y-auto max-h-[calc(85vh-8rem)] mt-4">
+          <TabsContent value="subagents" className="flex-1 min-h-0 overflow-y-auto mt-4">
             {content ?? (
               <AgentsList
                 agents={subagents}
@@ -96,12 +93,14 @@ export default function SettingsDialog({ open, onOpenChange }: SettingsDialogPro
                 agentFileExists={agentFileExists}
                 dirtyFiles={dirtyFiles}
                 saving={saving}
+                deleting={deleting}
                 onContentChange={handleContentChange}
                 onSave={handleSave}
+                onDelete={handleDelete}
               />
             )}
           </TabsContent>
-          <TabsContent value="experimental" className="overflow-y-auto max-h-[calc(85vh-8rem)] mt-4">
+          <TabsContent value="experimental" className="flex-1 min-h-0 overflow-y-auto mt-4">
             <SettingsExperimentalTab />
           </TabsContent>
         </Tabs>

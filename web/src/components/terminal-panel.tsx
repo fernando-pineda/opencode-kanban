@@ -7,6 +7,7 @@ import { X, Columns, Trash2, GripHorizontal } from 'lucide-react';
 interface TerminalPanelProps {
   boardId: number;
   onClose: () => void;
+  visible: boolean;
 }
 
 interface SplitTerm {
@@ -44,7 +45,10 @@ function SingleTerminal({ boardId, splitId, onClose }: { boardId: number; splitI
 
     if (containerRef.current) {
       terminal.open(containerRef.current);
-      requestAnimationFrame(() => fitAddon.fit());
+      requestAnimationFrame(() => {
+        fitAddon.fit();
+        terminal.focus();
+      });
     }
 
     const wsUrl = `ws://${window.location.host}/terminal?board_id=${boardId}&split_id=${splitId}`;
@@ -62,8 +66,12 @@ function SingleTerminal({ boardId, splitId, onClose }: { boardId: number; splitI
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
-        if (msg.type === 'output') terminal.write(msg.data);
-        else if (msg.type === 'exited') terminal.write('\r\n[Process exited]\r\n');
+         if (msg.type === 'output') terminal.write(msg.data);
+         else if (msg.type === 'exited') {
+          terminal.write('\r\n[Process exited]\r\n');
+          ws.close();
+          onClose();
+        }
       } catch {
         terminal.write(event.data);
       }
@@ -141,8 +149,8 @@ function SingleTerminal({ boardId, splitId, onClose }: { boardId: number; splitI
   );
 }
 
-export default function TerminalPanel({ boardId, onClose }: TerminalPanelProps) {
-  const [splits, setSplits] = useState<SplitTerm[]>(() => [{ id: nextSplitId() }]);
+export default function TerminalPanel({ boardId, onClose, visible }: TerminalPanelProps) {
+  const [splits, setSplits] = useState<SplitTerm[]>(() => [{ id: 'default' }]);
   const [height, setHeight] = useState(280);
   const panelRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
@@ -155,10 +163,23 @@ export default function TerminalPanel({ boardId, onClose }: TerminalPanelProps) 
 
   const removeSplit = useCallback((splitId: string) => {
     setSplits((prev) => {
-      if (prev.length <= 1) return prev;
+      if (prev.length <= 1) {
+        onClose();
+        return prev;
+      }
       return prev.filter((s) => s.id !== splitId);
     });
-  }, []);
+  }, [onClose]);
+
+  // Refit terminals when panel becomes visible
+  useEffect(() => {
+    if (visible) {
+      // Wait a frame for the container to get its dimensions back
+      requestAnimationFrame(() => {
+        window.dispatchEvent(new Event('resize'));
+      });
+    }
+  }, [visible]);
 
   // Resize drag handler
   const onMouseDown = useCallback((e: React.MouseEvent) => {
@@ -188,7 +209,7 @@ export default function TerminalPanel({ boardId, onClose }: TerminalPanelProps) 
     <div
       ref={panelRef}
       className="flex-shrink-0 border-t border-border bg-background flex flex-col"
-      style={{ height }}
+      style={{ height: visible ? height : 0, overflow: visible ? undefined : 'hidden', borderTopWidth: visible ? undefined : 0 }}
     >
       {/* Drag handle + header */}
       <div
@@ -216,7 +237,8 @@ export default function TerminalPanel({ boardId, onClose }: TerminalPanelProps) 
         </div>
       </div>
 
-      {/* Terminal splits */}
+      {/* Terminal splits — only rendered when visible so stale instances are unmounted */}
+      {visible && (
       <div className="flex flex-1 min-h-0">
         {splits.map((split, i) => (
           <div key={split.id} className="relative flex-1 min-w-0">
@@ -231,6 +253,7 @@ export default function TerminalPanel({ boardId, onClose }: TerminalPanelProps) 
           </div>
         ))}
       </div>
+      )}
     </div>
   );
 }

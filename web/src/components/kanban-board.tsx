@@ -4,6 +4,7 @@ import React, { useState } from 'react'
 import { BoardFull } from '../types'
 import KanbanColumn from './kanban-column'
 import ProjectSummarySheet from './project-summary-sheet'
+import MemoriesSheet from './memories-sheet'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Brain, PlusCircle, FileText } from 'lucide-react'
 
@@ -11,10 +12,12 @@ interface KanbanBoardProps {
   board: BoardFull
   onCardClick?: (sessionId: string) => void
   onNewSession?: () => void
+  onEpicClick?: (epicId: number) => void
 }
 
-export default function KanbanBoard({ board, onCardClick, onNewSession }: KanbanBoardProps) {
+export default function KanbanBoard({ board, onCardClick, onNewSession, onEpicClick }: KanbanBoardProps) {
   const [summaryOpen, setSummaryOpen] = useState(false)
+  const [memoriesOpen, setMemoriesOpen] = useState(false)
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -27,7 +30,7 @@ export default function KanbanBoard({ board, onCardClick, onNewSession }: Kanban
         <TooltipProvider delayDuration={300}>
           <div className="flex items-center gap-0.5 shrink-0 mt-0.5">
             {[
-              { icon: Brain, label: 'Memories', onClick: () => {} },
+              { icon: Brain, label: 'Memories', onClick: () => setMemoriesOpen(true) },
               { icon: PlusCircle, label: 'New Session', onClick: onNewSession || (() => {}) },
               { icon: FileText, label: 'Project Summary', onClick: () => setSummaryOpen(true) },
             ].map(({ icon: Icon, label, onClick }) => (
@@ -59,7 +62,9 @@ export default function KanbanBoard({ board, onCardClick, onNewSession }: Kanban
                 key={column.id}
                 column={column}
                 cards={columnCards}
+                epics={(board.epics || []).filter(e => e.column_name === column.name)}
                 onCardClick={onCardClick}
+                onEpicClick={onEpicClick}
               />
             )
           })}
@@ -70,6 +75,12 @@ export default function KanbanBoard({ board, onCardClick, onNewSession }: Kanban
         directory={board.board.repo_path}
         open={summaryOpen}
         onOpenChange={setSummaryOpen}
+      />
+
+      <MemoriesSheet
+        repoPath={board.board.repo_path}
+        open={memoriesOpen}
+        onOpenChange={setMemoriesOpen}
       />
     </div>
   )

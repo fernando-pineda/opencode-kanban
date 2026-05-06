@@ -11,7 +11,8 @@ import { setupTerminalServer } from "./terminal.js";
 import { exec, execFile } from "child_process";
 
 // ── Proxy to opencode's embedded HTTP server ──────────────
-const OPENCODE_SERVER = process.env.OPENCODE_SERVER_URL || "http://127.0.0.1:4096";
+const OPENCODE_SERVER =
+  process.env.OPENCODE_SERVER_URL || "http://127.0.0.1:4096";
 
 function getSessionDirectory(sessionId: string): string | null {
   try {
@@ -24,40 +25,98 @@ function getSessionDirectory(sessionId: string): string | null {
   }
 }
 
+/**
+ * Build the combined mandatory context: rules + memories + knowledge for the session's repo.
+ */
+function getMandatoryContext(sessionId: string): string {
+  const parts: string[] = [];
+
+  // 1. Rules (existing)
+  const rulesContent = getEnabledRulesContent();
+  if (rulesContent.trim()) {
+    parts.push(rulesContent.trim());
+  }
+
+  // 2. Memories + Knowledge for the session's repo
+  const repoPath = getSessionDirectory(sessionId);
+  if (repoPath) {
+    try {
+      const knowledge = listKnowledge(repoPath, { limit: 50 });
+      if (knowledge.length > 0) {
+        const kText = knowledge
+          .map((e) => `[${e.category}/${e.key}] ${e.title}: ${e.content}`)
+          .join("\n");
+        parts.push(`## Repository Knowledge (auto-loaded)\n${kText}`);
+      }
+    } catch { /* no knowledge table for this repo yet */ }
+
+    try {
+      const memories = getMemories(repoPath, { limit: 20 });
+      if (memories.length > 0) {
+        const mText = memories
+          .map((m) => `[${m.memory_type}] ${m.summary || (m.content || "").slice(0, 120)}`)
+          .join("\n");
+        parts.push(`## Recent Memories (auto-loaded)\n${mText}`);
+      }
+    } catch { /* no memories table for this repo yet */ }
+  }
+
+  return parts.join("\n\n");
+}
+
 async function proxyToOpencode(req: Request, res: Response) {
   try {
     const originalPath = req.originalUrl.replace("/api/opencode", "");
     const proxyUrl = new URL(`${OPENCODE_SERVER}${originalPath}`);
-    
+
     // Inject session directory for session-scoped routes if not already present
     const sessionMatch = originalPath.match(/^\/session\/([^/]+)\/(.+)/);
     if (sessionMatch && !proxyUrl.searchParams.has("directory")) {
       const sessionDir = getSessionDirectory(sessionMatch[1]);
       if (sessionDir) proxyUrl.searchParams.set("directory", sessionDir);
     }
-    
+
     const url = proxyUrl.toString();
     const headers: Record<string, string> = {};
-    if (req.headers["content-type"]) headers["content-type"] = req.headers["content-type"] as string;
-    const body = req.body && Object.keys(req.body).length > 0 ? JSON.stringify(req.body) : undefined;
+    if (req.headers["content-type"])
+      headers["content-type"] = req.headers["content-type"] as string;
+    const body =
+      req.body && Object.keys(req.body).length > 0
+        ? JSON.stringify(req.body)
+        : undefined;
     const opencodeRes = await fetch(url, {
       method: req.method,
       headers,
       body,
     });
-    res.status(opencodeRes.status).set("Content-Type", opencodeRes.headers.get("content-type") || "application/json");
+    res
+      .status(opencodeRes.status)
+      .set(
+        "Content-Type",
+        opencodeRes.headers.get("content-type") || "application/json",
+      );
     const text = await opencodeRes.text();
     res.send(text);
   } catch (err) {
-    res.status(502).json({ error: `opencode server unreachable: ${(err as Error).message}` });
+    res
+      .status(502)
+      .json({
+        error: `opencode server unreachable: ${(err as Error).message}`,
+      });
   }
 }
-import { bus, EVENT_TYPES, type KanbanEvents, emitBoardChange } from "./event-bus.js";
+import {
+  bus,
+  EVENT_TYPES,
+  type KanbanEvents,
+  emitBoardChange,
+} from "./event-bus.js";
 import {
   listBoards,
   getBoardFull,
   getOrCreateBoard,
   archiveBoard,
+  reorderBoards,
   moveSessionToColumn,
   searchCards,
   getSubtasks,
@@ -85,7 +144,40 @@ import {
   getSessionModel,
   getActiveSessionIds,
   deleteSession,
+  setSessionCompacting,
+  isSessionCompacting,
+  createEpic,
+  updateEpic,
+  getEpic,
+  getEpicsByBoard,
+  deleteEpic,
+  addEpicSession,
+  getEpicSessions,
+  updateEpicStatus,
+  createNotification,
+  getNotifications,
+  getUnseenNotificationCount,
+  getAllUnseenCounts,
+  markNotificationSeen,
+  markAllNotificationsSeen,
+  markSessionNotificationsSeen,
+  getNotificationBoardForSession,
 } from "./db.js";
+import {
+  searchMemories,
+  getMemories,
+  getMemoriesCount,
+  getMemoriesStats,
+  pruneMemories,
+  getRepos as getMemoryRepos,
+  searchKnowledge,
+  getKnowledge,
+  listKnowledge,
+  getKnowledgeStats,
+  getStaleKnowledge,
+  deleteKnowledge,
+} from "./memories.js";
+import type { KnowledgeCategory, MemoryType } from "./types.js";
 
 // ── Setup ────────────────────────────────────────────────────
 
@@ -115,7 +207,11 @@ app.get("/api/agents/:name/file", (req: Request, res: Response) => {
       return;
     }
 
-    const filePath = path.join(os.homedir(), ".config/opencode/agents", `${name}.md`);
+    const filePath = path.join(
+      os.homedir(),
+      ".config/opencode/agents",
+      `${name}.md`,
+    );
 
     try {
       const content = fs.readFileSync(filePath, "utf-8");
@@ -150,7 +246,11 @@ app.put("/api/agents/:name/file", (req: Request, res: Response) => {
       return;
     }
 
-    const filePath = path.join(os.homedir(), ".config/opencode/agents", `${name}.md`);
+    const filePath = path.join(
+      os.homedir(),
+      ".config/opencode/agents",
+      `${name}.md`,
+    );
 
     try {
       fs.writeFileSync(filePath, content, "utf-8");
@@ -163,10 +263,48 @@ app.put("/api/agents/:name/file", (req: Request, res: Response) => {
   }
 });
 
+// DELETE /api/agents/:name/file - Delete agent markdown file
+app.delete("/api/agents/:name/file", (req: Request, res: Response) => {
+  try {
+    const { name } = req.params;
+
+    // Validate agent name
+    if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+      res.status(400).json({ error: "Invalid agent name" });
+      return;
+    }
+
+    const filePath = path.join(
+      os.homedir(),
+      ".config/opencode/agents",
+      `${name}.md`,
+    );
+
+    try {
+      // Check if file exists
+      if (!fs.existsSync(filePath)) {
+        res.status(404).json({ error: "Agent file not found" });
+        return;
+      }
+
+      // Delete the file
+      fs.unlinkSync(filePath);
+      res.json({ success: true, name });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
 // ── Create new session via opencode ──────────────────────
 app.post("/api/sessions", async (req: Request, res: Response) => {
   try {
-    const { directory, board_id } = req.body as { directory?: string; board_id?: number };
+    const { directory, board_id } = req.body as {
+      directory?: string;
+      board_id?: number;
+    };
     const url = new URL(`${OPENCODE_SERVER}/session`);
     if (directory) url.searchParams.set("directory", directory);
     const opencodeRes = await fetch(url.toString(), {
@@ -176,7 +314,9 @@ app.post("/api/sessions", async (req: Request, res: Response) => {
     });
     if (!opencodeRes.ok) {
       const body = await opencodeRes.text().catch(() => "");
-      res.status(opencodeRes.status).json({ error: body || `opencode error ${opencodeRes.status}` });
+      res
+        .status(opencodeRes.status)
+        .json({ error: body || `opencode error ${opencodeRes.status}` });
       return;
     }
     const session = await opencodeRes.json();
@@ -184,8 +324,9 @@ app.post("/api/sessions", async (req: Request, res: Response) => {
     if (directory) {
       try {
         const db = getDb();
-        db.prepare("UPDATE session SET directory = ?, path = ? WHERE id = ?")
-          .run(directory, directory.replace(/^\//, ""), session.id);
+        db.prepare(
+          "UPDATE session SET directory = ?, path = ? WHERE id = ?",
+        ).run(directory, directory.replace(/^\//, ""), session.id);
       } catch {
         // non-critical: session created but directory may not match board
       }
@@ -197,62 +338,89 @@ app.post("/api/sessions", async (req: Request, res: Response) => {
       // Fallback: look up board from directory
       try {
         const board = getDb()
-          .prepare("SELECT id FROM kanban_boards WHERE repo_path = ? AND status = 'active'")
+          .prepare(
+            "SELECT id FROM kanban_boards WHERE repo_path = ? AND status = 'active'",
+          )
           .get(directory) as { id: number } | undefined;
         if (board) {
-          emitBoardChange("card_created", { session_id: session.id, board_id: board.id });
+          emitBoardChange("card_created", {
+            session_id: session.id,
+            board_id: board.id,
+          });
         }
       } catch {
         // non-critical
       }
     }
     // Return updated session with corrected directory
-    res.json({ ...session, directory: directory || session.directory, path: directory ? directory.replace(/^\//, "") : session.path });
+    res.json({
+      ...session,
+      directory: directory || session.directory,
+      path: directory ? directory.replace(/^\//, "") : session.path,
+    });
   } catch (err) {
-    res.status(502).json({ error: `opencode server unreachable: ${(err as Error).message}` });
+    res
+      .status(502)
+      .json({
+        error: `opencode server unreachable: ${(err as Error).message}`,
+      });
   }
 });
 
 // ── Send message via opencode serve HTTP API ──────────────
-app.post("/api/sessions/:sessionId/send", async (req: Request, res: Response) => {
-  try {
-    const { sessionId } = req.params;
-    const { text, agent } = req.body as { text?: string; agent?: string };
-    if (!text?.trim()) {
-      res.status(400).json({ error: "Message text is required" });
-      return;
+app.post(
+  "/api/sessions/:sessionId/send",
+  async (req: Request, res: Response) => {
+    try {
+      const { sessionId } = req.params;
+      const { text, agent } = req.body as { text?: string; agent?: string };
+      if (!text?.trim()) {
+        res.status(400).json({ error: "Message text is required" });
+        return;
+      }
+
+      // Build parts array — inject mandatory rules + memories + knowledge
+      const parts: object[] = [];
+      const mandatoryContext = getMandatoryContext(sessionId);
+      if (mandatoryContext.trim()) {
+        parts.push({
+          type: "text",
+          text: `<mandatory>\n${mandatoryContext}\n</mandatory>`,
+        });
+      }
+      parts.push({ type: "text", text: text.trim() });
+
+      const sessionDir = getSessionDirectory(sessionId);
+      const messageUrl = new URL(
+        `${OPENCODE_SERVER}/session/${sessionId}/prompt_async`,
+      );
+      if (sessionDir) messageUrl.searchParams.set("directory", sessionDir);
+      const url = messageUrl.toString();
+      const opencodeRes = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ parts, ...(agent ? { agent } : {}) }),
+      });
+
+      if (!opencodeRes.ok) {
+        const body = await opencodeRes.text().catch(() => "");
+        res
+          .status(opencodeRes.status)
+          .json({ error: body || `opencode error ${opencodeRes.status}` });
+        return;
+      }
+
+      // prompt_async returns 204 — respond immediately
+      res.status(200).json({ ok: true });
+    } catch (err) {
+      res
+        .status(502)
+        .json({
+          error: `opencode server unreachable: ${(err as Error).message}`,
+        });
     }
-
-    // Build parts array — inject mandatory rules
-    const parts: object[] = [];
-    const rulesContent = getEnabledRulesContent();
-    if (rulesContent.trim()) {
-      parts.push({ type: "text", text: `<mandatory>\n${rulesContent.trim()}\n</mandatory>` });
-    }
-    parts.push({ type: "text", text: text.trim() });
-
-    const sessionDir = getSessionDirectory(sessionId);
-    const messageUrl = new URL(`${OPENCODE_SERVER}/session/${sessionId}/prompt_async`);
-    if (sessionDir) messageUrl.searchParams.set("directory", sessionDir);
-    const url = messageUrl.toString();
-    const opencodeRes = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ parts, ...(agent ? { agent } : {}) }),
-    });
-
-    if (!opencodeRes.ok) {
-      const body = await opencodeRes.text().catch(() => "");
-      res.status(opencodeRes.status).json({ error: body || `opencode error ${opencodeRes.status}` });
-      return;
-    }
-
-    // prompt_async returns 204 — respond immediately
-    res.status(200).json({ ok: true });
-  } catch (err) {
-    res.status(502).json({ error: `opencode server unreachable: ${(err as Error).message}` });
-  }
-});
+  },
+);
 
 // ── Question tool proxy (opencode question API) ──────────────────────
 
@@ -265,63 +433,87 @@ app.get("/api/opencode/question", async (req: Request, res: Response) => {
     const opencodeRes = await fetch(url.toString());
     if (!opencodeRes.ok) {
       const body = await opencodeRes.text().catch(() => "");
-      res.status(opencodeRes.status).json({ error: body || `opencode error ${opencodeRes.status}` });
+      res
+        .status(opencodeRes.status)
+        .json({ error: body || `opencode error ${opencodeRes.status}` });
       return;
     }
     const data = await opencodeRes.json();
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     res.json(data);
   } catch (err) {
-    res.status(502).json({ error: `opencode server unreachable: ${(err as Error).message}` });
+    res
+      .status(502)
+      .json({
+        error: `opencode server unreachable: ${(err as Error).message}`,
+      });
   }
 });
 
 // POST reply to a question
-app.post("/api/opencode/question/:questionId/reply", async (req: Request, res: Response) => {
-  try {
-    const { questionId } = req.params;
-    const url = new URL(`${OPENCODE_SERVER}/question/${questionId}/reply`);
-    const dir = req.query.directory as string | undefined;
-    if (dir) url.searchParams.set("directory", dir);
-    const opencodeRes = await fetch(url.toString(), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(req.body),
-    });
-    if (!opencodeRes.ok) {
-      const body = await opencodeRes.text().catch(() => "");
-      res.status(opencodeRes.status).json({ error: body || `opencode error ${opencodeRes.status}` });
-      return;
+app.post(
+  "/api/opencode/question/:questionId/reply",
+  async (req: Request, res: Response) => {
+    try {
+      const { questionId } = req.params;
+      const url = new URL(`${OPENCODE_SERVER}/question/${questionId}/reply`);
+      const dir = req.query.directory as string | undefined;
+      if (dir) url.searchParams.set("directory", dir);
+      const opencodeRes = await fetch(url.toString(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(req.body),
+      });
+      if (!opencodeRes.ok) {
+        const body = await opencodeRes.text().catch(() => "");
+        res
+          .status(opencodeRes.status)
+          .json({ error: body || `opencode error ${opencodeRes.status}` });
+        return;
+      }
+      const data = await opencodeRes.json();
+      res.json(data);
+    } catch (err) {
+      res
+        .status(502)
+        .json({
+          error: `opencode server unreachable: ${(err as Error).message}`,
+        });
     }
-    const data = await opencodeRes.json();
-    res.json(data);
-  } catch (err) {
-    res.status(502).json({ error: `opencode server unreachable: ${(err as Error).message}` });
-  }
-});
+  },
+);
 
 // POST reject a question
-app.post("/api/opencode/question/:questionId/reject", async (req: Request, res: Response) => {
-  try {
-    const { questionId } = req.params;
-    const url = new URL(`${OPENCODE_SERVER}/question/${questionId}/reject`);
-    const dir = req.query.directory as string | undefined;
-    if (dir) url.searchParams.set("directory", dir);
-    const opencodeRes = await fetch(url.toString(), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-    });
-    if (!opencodeRes.ok) {
-      const body = await opencodeRes.text().catch(() => "");
-      res.status(opencodeRes.status).json({ error: body || `opencode error ${opencodeRes.status}` });
-      return;
+app.post(
+  "/api/opencode/question/:questionId/reject",
+  async (req: Request, res: Response) => {
+    try {
+      const { questionId } = req.params;
+      const url = new URL(`${OPENCODE_SERVER}/question/${questionId}/reject`);
+      const dir = req.query.directory as string | undefined;
+      if (dir) url.searchParams.set("directory", dir);
+      const opencodeRes = await fetch(url.toString(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!opencodeRes.ok) {
+        const body = await opencodeRes.text().catch(() => "");
+        res
+          .status(opencodeRes.status)
+          .json({ error: body || `opencode error ${opencodeRes.status}` });
+        return;
+      }
+      const data = await opencodeRes.json();
+      res.json(data);
+    } catch (err) {
+      res
+        .status(502)
+        .json({
+          error: `opencode server unreachable: ${(err as Error).message}`,
+        });
     }
-    const data = await opencodeRes.json();
-    res.json(data);
-  } catch (err) {
-    res.status(502).json({ error: `opencode server unreachable: ${(err as Error).message}` });
-  }
-});
+  },
+);
 
 // ── Project Summary ────────────────────────────────────────
 app.post("/api/project-summary", async (req: Request, res: Response) => {
@@ -342,7 +534,9 @@ app.post("/api/project-summary", async (req: Request, res: Response) => {
     });
     if (!sessionRes.ok) {
       const body = await sessionRes.text().catch(() => "");
-      res.status(sessionRes.status).json({ error: body || `opencode error ${sessionRes.status}` });
+      res
+        .status(sessionRes.status)
+        .json({ error: body || `opencode error ${sessionRes.status}` });
       return;
     }
     const session = await sessionRes.json();
@@ -350,14 +544,19 @@ app.post("/api/project-summary", async (req: Request, res: Response) => {
     // 2. Update session directory in kanban DB so getSessionMessages works
     try {
       const db = getDb();
-      db.prepare("UPDATE session SET directory = ?, path = ? WHERE id = ?")
-        .run(directory, directory.replace(/^\//, ""), session.id);
+      db.prepare("UPDATE session SET directory = ?, path = ? WHERE id = ?").run(
+        directory,
+        directory.replace(/^\//, ""),
+        session.id,
+      );
     } catch {
       // non-critical
     }
 
     // 3. Send the summary prompt via prompt_async (non-blocking)
-    const promptUrl = new URL(`${OPENCODE_SERVER}/session/${session.id}/prompt_async`);
+    const promptUrl = new URL(
+      `${OPENCODE_SERVER}/session/${session.id}/prompt_async`,
+    );
     promptUrl.searchParams.set("directory", directory);
     const promptRes = await fetch(promptUrl.toString(), {
       method: "POST",
@@ -373,14 +572,20 @@ app.post("/api/project-summary", async (req: Request, res: Response) => {
     });
     if (!promptRes.ok) {
       const body = await promptRes.text().catch(() => "");
-      res.status(promptRes.status).json({ error: body || `opencode prompt error ${promptRes.status}` });
+      res
+        .status(promptRes.status)
+        .json({ error: body || `opencode prompt error ${promptRes.status}` });
       return;
     }
 
     // 4. Return session ID — frontend will poll messages
     res.json({ session_id: session.id });
   } catch (err) {
-    res.status(502).json({ error: `opencode server unreachable: ${(err as Error).message}` });
+    res
+      .status(502)
+      .json({
+        error: `opencode server unreachable: ${(err as Error).message}`,
+      });
   }
 });
 
@@ -406,12 +611,32 @@ app.get("/api/boards/:id", async (req: Request, res: Response) => {
     // The directory parameter is required — without it the endpoint returns {}
     try {
       const statusUrl = new URL(`${OPENCODE_SERVER}/session/status`);
-      if (boardFull.board.repo_path) statusUrl.searchParams.set("directory", boardFull.board.repo_path);
+      if (boardFull.board.repo_path)
+        statusUrl.searchParams.set("directory", boardFull.board.repo_path);
       const statusRes = await fetch(statusUrl.toString());
       if (statusRes.ok) {
-        const statuses = await statusRes.json() as Record<string, { type: string }>;
+        const statuses = (await statusRes.json()) as Record<
+          string,
+          { type: string }
+        >;
         for (const card of boardFull.cards) {
-          card.is_busy = statuses[card.session_id]?.type === "busy" || statuses[card.session_id]?.type === "retry" || false;
+          card.is_busy =
+            statuses[card.session_id]?.type === "busy" ||
+            statuses[card.session_id]?.type === "retry" ||
+            false;
+        }
+        // Also populate is_busy for epic sessions
+        if (boardFull.epics) {
+          for (const epic of boardFull.epics) {
+            if (epic.sessions) {
+              for (const session of epic.sessions) {
+                session.is_busy =
+                  statuses[session.session_id]?.type === "busy" ||
+                  statuses[session.session_id]?.type === "retry" ||
+                  false;
+              }
+            }
+          }
         }
       }
     } catch {
@@ -444,6 +669,19 @@ app.delete("/api/boards/:id", (req: Request, res: Response) => {
     res.json({ success: true });
   } catch (error) {
     res.status(400).json({ error: (error as Error).message });
+  }
+});
+
+app.put("/api/boards/reorder", (req: Request, res: Response) => {
+  try {
+    const { board_ids } = req.body;
+    if (!Array.isArray(board_ids) || board_ids.length === 0) {
+      return res.status(400).json({ error: "board_ids array is required" });
+    }
+    reorderBoards(board_ids);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
   }
 });
 
@@ -644,6 +882,206 @@ app.get("/api/repos", (req: Request, res: Response) => {
   }
 });
 
+// ── Memories API ──────────────────────────────────────────────
+
+// Search memories
+app.get("/api/memories/search", (req: Request, res: Response) => {
+  try {
+    const repo_path = req.query.repo_path as string;
+    const query = req.query.query as string;
+    if (!repo_path || !query) {
+      return res.status(400).json({ error: "repo_path and query are required" });
+    }
+    const results = searchMemories(repo_path, {
+      query,
+      agentName: req.query.agent_name as string | undefined,
+      memoryType: req.query.memory_type as MemoryType | undefined,
+      conversationId: req.query.conversation_id as string | undefined,
+      limit: parseInt(req.query.limit as string) || 20,
+    });
+    res.json({ count: results.length, memories: results });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// List memories (paginated)
+app.get("/api/memories", (req: Request, res: Response) => {
+    try {
+    const repo_path = req.query.repo_path as string;
+    if (!repo_path) {
+      return res.status(400).json({ error: "repo_path is required" });
+    }
+    const limit = parseInt(req.query.limit as string) || 50;
+    const offset = parseInt(req.query.offset as string) || 0;
+    const memoryType = req.query.memory_type as string | undefined;
+    const results = getMemories(repo_path, {
+      conversationId: req.query.conversation_id as string | undefined,
+      agentName: req.query.agent_name as string | undefined,
+      memoryType,
+      limit,
+      offset,
+    });
+    const total = getMemoriesCount(repo_path, { memoryType });
+    res.json({ count: results.length, total, memories: results });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// Prune memories
+app.post("/api/memories/prune", (req: Request, res: Response) => {
+  try {
+    const { repo_path, keep_days, keep_important } = req.body as {
+      repo_path?: string;
+      keep_days?: number;
+      keep_important?: boolean;
+    };
+    if (!repo_path) {
+      return res.status(400).json({ error: "repo_path is required" });
+    }
+    const removed = pruneMemories(repo_path, {
+      keepDays: keep_days || 90,
+      keepImportant: keep_important !== false,
+    });
+    res.json({ removed });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// List repos with memories
+app.get("/api/memories/repos", (_req: Request, res: Response) => {
+  try {
+    const repos = getMemoryRepos();
+    res.json({ count: repos.length, repos });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// Memories stats (counts per type)
+app.get("/api/memories/stats", (req: Request, res: Response) => {
+  try {
+    const repo_path = req.query.repo_path as string;
+    if (!repo_path) {
+      return res.status(400).json({ error: "repo_path is required" });
+    }
+    const stats = getMemoriesStats(repo_path);
+    res.json(stats);
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// Search knowledge
+app.get("/api/knowledge/search", (req: Request, res: Response) => {
+  try {
+    const repo_path = req.query.repo_path as string;
+    const query = req.query.query as string;
+    if (!repo_path || !query) {
+      return res.status(400).json({ error: "repo_path and query are required" });
+    }
+    const results = searchKnowledge(repo_path, {
+      query,
+      category: req.query.category as KnowledgeCategory | undefined,
+      limit: parseInt(req.query.limit as string) || 30,
+    });
+    res.json({ count: results.length, entries: results });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// Get specific knowledge entry
+app.get("/api/knowledge/entry", (req: Request, res: Response) => {
+  try {
+    const repo_path = req.query.repo_path as string;
+    const category = req.query.category as KnowledgeCategory;
+    const key = req.query.key as string;
+    if (!repo_path || !category || !key) {
+      return res.status(400).json({ error: "repo_path, category, and key are required" });
+    }
+    const result = getKnowledge(repo_path, { category, key });
+    if (!result) {
+      return res.status(404).json({ error: "Entry not found" });
+    }
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// List knowledge entries
+app.get("/api/knowledge", (req: Request, res: Response) => {
+  try {
+    const repo_path = req.query.repo_path as string;
+    if (!repo_path) {
+      return res.status(400).json({ error: "repo_path is required" });
+    }
+    const limit = parseInt(req.query.limit as string) || 200;
+    const offset = parseInt(req.query.offset as string) || 0;
+    const category = req.query.category as KnowledgeCategory | undefined;
+    const results = listKnowledge(repo_path, {
+      category,
+      limit,
+      offset,
+    });
+    const stats = getKnowledgeStats(repo_path);
+    res.json({ count: results.length, total: stats.total, entries: results });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// Knowledge stats
+app.get("/api/knowledge/stats", (req: Request, res: Response) => {
+  try {
+    const repo_path = req.query.repo_path as string;
+    if (!repo_path) {
+      return res.status(400).json({ error: "repo_path is required" });
+    }
+    const stats = getKnowledgeStats(repo_path);
+    res.json(stats);
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// Stale knowledge
+app.get("/api/knowledge/stale", (req: Request, res: Response) => {
+  try {
+    const repo_path = req.query.repo_path as string;
+    if (!repo_path) {
+      return res.status(400).json({ error: "repo_path is required" });
+    }
+    const results = getStaleKnowledge(repo_path, {
+      category: req.query.category as KnowledgeCategory | undefined,
+      olderThanDays: parseInt(req.query.older_than_days as string) || 7,
+      limit: parseInt(req.query.limit as string) || 100,
+    });
+    res.json({ count: results.length, entries: results });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// Delete knowledge entry
+app.delete("/api/knowledge", (req: Request, res: Response) => {
+  try {
+    const repo_path = req.query.repo_path as string;
+    const category = req.query.category as KnowledgeCategory;
+    const key = req.query.key as string;
+    if (!repo_path || !category || !key) {
+      return res.status(400).json({ error: "repo_path, category, and key are required" });
+    }
+    const deleted = deleteKnowledge(repo_path, { category, key });
+    res.json({ deleted });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
 // ── Rules ─────────────────────────────────────────────────────
 
 app.get("/api/rules", (req: Request, res: Response) => {
@@ -657,7 +1095,11 @@ app.get("/api/rules", (req: Request, res: Response) => {
 
 app.post("/api/rules", (req: Request, res: Response) => {
   try {
-    const { title, content, enabled } = req.body as { title?: string; content?: string; enabled?: boolean };
+    const { title, content, enabled } = req.body as {
+      title?: string;
+      content?: string;
+      enabled?: boolean;
+    };
     const rule = createRule(title || "", content || "", enabled !== false);
     res.json(rule);
   } catch (error) {
@@ -697,6 +1139,457 @@ app.delete("/api/rules/:id", (req: Request, res: Response) => {
   }
 });
 
+// ── Swarm Mode ────────────────────────────────────────────
+
+app.post("/api/sessions/swarm", async (req: Request, res: Response) => {
+  try {
+    const { directory, board_id, task, agent } = req.body as {
+      directory?: string;
+      board_id?: number;
+      task?: string;
+      agent?: string;
+    };
+
+    if (!directory || !board_id || !task) {
+      return res
+        .status(400)
+        .json({ error: "directory, board_id, and task are required" });
+    }
+
+    // 1. Create epic
+    const epic = createEpic(board_id, task, task, null);
+
+    // 2. Create opencode planner session
+    const sessionUrl = new URL(`${OPENCODE_SERVER}/session`);
+    sessionUrl.searchParams.set("directory", directory);
+    const sessionRes = await fetch(sessionUrl.toString(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    if (!sessionRes.ok) {
+      const body = await sessionRes.text().catch(() => "");
+      deleteEpic(epic.id);
+      return res
+        .status(sessionRes.status)
+        .json({ error: body || `opencode error ${sessionRes.status}` });
+    }
+    const session = await sessionRes.json();
+
+    // 3. Update session directory in DB
+    try {
+      const db = getDb();
+      db.prepare("UPDATE session SET directory = ?, path = ? WHERE id = ?").run(
+        directory,
+        directory.replace(/^\//, ""),
+        session.id,
+      );
+    } catch {
+      // non-critical
+    }
+
+    // 4. Update epic with planner session ID
+    updateEpic(epic.id, { planner_session_id: session.id });
+
+    // 5. Send decomposition prompt to planner
+    const parts: object[] = [];
+    const mandatoryContext = session.id ? getMandatoryContext(session.id) : getEnabledRulesContent();
+    if (mandatoryContext.trim()) {
+      parts.push({
+        type: "text",
+        text: `<mandatory>\n${mandatoryContext}\n</mandatory>`,
+      });
+    }
+    parts.push({
+      type: "text",
+      text: `You are a task decomposition specialist. Break down the following task into independent subtasks that can be executed in parallel by separate AI agents.
+
+Rules:
+- Each subtask must be self-contained with all necessary context
+- Clear scope and deliverable for each
+- Between 2 and 8 subtasks
+- Specific enough for an AI agent to execute independently
+
+Task: ${task}
+
+After your analysis, output a JSON array inside <swarm-plan> tags:
+<swarm-plan>
+[{"title": "Short title", "description": "Detailed description with all context needed..."}]
+</swarm-plan>`,
+    });
+
+    const promptUrl = new URL(
+      `${OPENCODE_SERVER}/session/${session.id}/prompt_async`,
+    );
+    promptUrl.searchParams.set("directory", directory);
+    await fetch(promptUrl.toString(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ parts, ...(agent ? { agent } : {}) }),
+    });
+
+    res.json({ planner_session_id: session.id, epic_id: epic.id });
+  } catch (err) {
+    res
+      .status(502)
+      .json({
+        error: `opencode server unreachable: ${(err as Error).message}`,
+      });
+  }
+});
+
+app.post("/api/sessions/swarm/spawn", async (req: Request, res: Response) => {
+  try {
+    const { directory, board_id, epic_id, subtasks, original_task, agent } =
+      req.body as {
+        directory?: string;
+        board_id?: number;
+        epic_id?: number;
+        subtasks?: Array<{ title: string; description: string }>;
+        original_task?: string;
+        agent?: string;
+      };
+
+    if (!directory || !board_id || !epic_id || !subtasks || !original_task) {
+      return res
+        .status(400)
+        .json({
+          error:
+            "directory, board_id, epic_id, subtasks, and original_task are required",
+        });
+    }
+
+    const epic = getEpic(epic_id);
+    if (!epic) {
+      return res.status(404).json({ error: "Epic not found" });
+    }
+
+    // Update epic status to spawning
+    updateEpic(epic_id, { status: "spawning" });
+
+    const spawned: Array<{ id: string; task_key: string; title: string }> = [];
+
+    for (let i = 0; i < subtasks.length; i++) {
+      const subtask = subtasks[i];
+      const childKey = `${epic.task_key}.${i + 1}`;
+
+      try {
+        // Create opencode session
+        const sessionUrl = new URL(`${OPENCODE_SERVER}/session`);
+        sessionUrl.searchParams.set("directory", directory);
+        const sessionRes = await fetch(sessionUrl.toString(), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+
+        if (!sessionRes.ok) {
+          console.error(
+            `[swarm] Failed to create session for subtask ${childKey}`,
+          );
+          continue;
+        }
+
+        const session = await sessionRes.json();
+
+        // Update session directory
+        try {
+          const db = getDb();
+          db.prepare(
+            "UPDATE session SET directory = ?, path = ? WHERE id = ?",
+          ).run(directory, directory.replace(/^\//, ""), session.id);
+        } catch {
+          // non-critical
+        }
+
+        // Send subtask prompt
+        const parts: object[] = [];
+        const mandatoryContext = session.id ? getMandatoryContext(session.id) : getEnabledRulesContent();
+        if (mandatoryContext.trim()) {
+          parts.push({
+            type: "text",
+            text: `<mandatory>\n${mandatoryContext}\n</mandatory>`,
+          });
+        }
+        parts.push({
+          type: "text",
+          text: `You are part of a swarm working on: ${original_task}
+
+Your specific assignment (${childKey}): ${subtask.title}
+${subtask.description}
+
+Focus ONLY on your assigned subtask. Do not modify files outside your scope.`,
+        });
+
+        const promptUrl = new URL(
+          `${OPENCODE_SERVER}/session/${session.id}/prompt_async`,
+        );
+        promptUrl.searchParams.set("directory", directory);
+        await fetch(promptUrl.toString(), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ parts, ...(agent ? { agent } : {}) }),
+        });
+
+        // Add to epic sessions
+        addEpicSession(
+          epic_id,
+          session.id,
+          childKey,
+          i,
+          subtask.title,
+          subtask.description,
+        );
+        spawned.push({
+          id: session.id,
+          task_key: childKey,
+          title: subtask.title,
+        });
+      } catch (err) {
+        console.error(
+          `[swarm] Error creating session for subtask ${childKey}:`,
+          err,
+        );
+      }
+    }
+
+    // Update epic: running + move to In Progress
+    updateEpic(epic_id, { status: "running", column_name: "In Progress" });
+
+    // Auto-complete planner session
+    if (epic.planner_session_id) {
+      markSessionCompleted(epic.planner_session_id);
+    }
+
+    res.json({ sessions: spawned });
+  } catch (err) {
+    res
+      .status(502)
+      .json({
+        error: `opencode server unreachable: ${(err as Error).message}`,
+      });
+  }
+});
+
+app.get("/api/epics/:epicId", async (req: Request, res: Response) => {
+  try {
+    const epicId = parseInt(req.params.epicId, 10);
+    const epic = getEpic(epicId);
+    if (!epic) {
+      return res.status(404).json({ error: "Epic not found" });
+    }
+
+    // Populate sessions
+    epic.sessions = getEpicSessions(epicId);
+
+    // Auto-update status based on children
+    updateEpicStatus(epicId);
+    const updatedEpic = getEpic(epicId);
+    if (updatedEpic) {
+      updatedEpic.sessions = epic.sessions;
+    }
+
+    // Auto-detect swarm plan from planner session if epic is still in 'planning' status
+    const epicToCheck = updatedEpic || epic;
+    if (epicToCheck.status === "planning" && epicToCheck.planner_session_id) {
+      try {
+        const messagesRes = getSessionMessages(
+          epicToCheck.planner_session_id,
+          50,
+          0,
+        );
+        const messages = messagesRes.messages || [];
+        // Find last assistant message with <swarm-plan>
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const msg = messages[i];
+          if (msg.role !== "assistant") continue;
+          const text = msg.text || "";
+          const planMatch = text.match(/<swarm-plan>([\s\S]*?)<\/swarm-plan>/);
+          if (planMatch) {
+            const planText = planMatch[1].trim();
+            try {
+              let parsed = JSON.parse(planText);
+              if (
+                !Array.isArray(parsed) &&
+                typeof parsed === "object" &&
+                parsed.subtasks
+              ) {
+                parsed = parsed.subtasks;
+              }
+              if (Array.isArray(parsed) && parsed.length >= 2) {
+                updateEpic(epicId, { plan_text: planText, status: "ready" });
+                // Re-fetch updated epic
+                const reUpdated = getEpic(epicId);
+                if (reUpdated) {
+                  reUpdated.sessions = epicToCheck.sessions;
+                  Object.assign(epicToCheck, reUpdated);
+                }
+              }
+            } catch {
+              // Plan text not valid JSON yet — planner may still be generating
+            }
+            break;
+          }
+        }
+      } catch {
+        // Message fetch failed — planner session may not be accessible
+      }
+    }
+
+    // Parse plan_subtasks from plan_text if available
+    if (epicToCheck.plan_text && epicToCheck.status === "ready") {
+      try {
+        let parsed = JSON.parse(epicToCheck.plan_text);
+        if (
+          !Array.isArray(parsed) &&
+          typeof parsed === "object" &&
+          parsed.subtasks
+        ) {
+          parsed = parsed.subtasks;
+        }
+        if (Array.isArray(parsed)) {
+          epicToCheck.plan_subtasks = parsed.map((s: any) => ({
+            title: String(s.title || ""),
+            description: String(s.description || ""),
+          }));
+        }
+      } catch {
+        // Failed to parse plan_text
+      }
+    }
+
+    // Populate is_busy for each session from opencode statuses
+    try {
+      const statusUrl = new URL(`${OPENCODE_SERVER}/session/status`);
+      const board = getDb()
+        .prepare("SELECT repo_path FROM kanban_boards WHERE id = ?")
+        .get(epic.board_id) as { repo_path: string } | undefined;
+      if (board?.repo_path)
+        statusUrl.searchParams.set("directory", board.repo_path);
+      const statusRes = await fetch(statusUrl.toString());
+      if (statusRes.ok) {
+        const statuses = (await statusRes.json()) as Record<
+          string,
+          { type: string }
+        >;
+        for (const session of (updatedEpic || epic).sessions!) {
+          session.is_busy =
+            statuses[session.session_id]?.type === "busy" ||
+            statuses[session.session_id]?.type === "retry" ||
+            false;
+        }
+      }
+    } catch {
+      // Status fetch is non-critical
+    }
+
+    res.json(updatedEpic || epic);
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+app.delete("/api/epics/:epicId", (req: Request, res: Response) => {
+  try {
+    const epicId = parseInt(req.params.epicId, 10);
+    deleteEpic(epicId);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message });
+  }
+});
+
+// POST /api/epics/:epicId/complete — mark epic + all sessions as Done
+app.post("/api/epics/:epicId/complete", (req: Request, res: Response) => {
+  try {
+    const epicId = parseInt(req.params.epicId, 10);
+    const epic = getEpic(epicId);
+    if (!epic) {
+      res.status(404).json({ error: "Epic not found" });
+      return;
+    }
+    // Mark all child sessions as completed
+    const sessions = getEpicSessions(epicId);
+    for (const session of sessions) {
+      markSessionCompleted(session.session_id);
+    }
+    // Mark planner session as completed too
+    if (epic.planner_session_id) {
+      markSessionCompleted(epic.planner_session_id);
+    }
+    // Update epic status + move to Done column
+    updateEpic(epicId, { status: "completed", column_name: "Done" });
+    res.json({ success: true, sessions_completed: sessions.length });
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message });
+  }
+});
+
+// ── Notifications API ─────────────────────────────────────────
+
+// GET /api/notifications — get all notifications for a board
+app.get("/api/notifications", (req: Request, res: Response) => {
+  try {
+    const boardId = parseInt(req.query.board_id as string, 10);
+    if (!boardId) {
+      return res.status(400).json({ error: "board_id query param is required" });
+    }
+    const notifications = getNotifications(boardId);
+    res.json(notifications);
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// GET /api/notifications/unseen-counts — get unseen counts for all boards
+app.get("/api/notifications/unseen-counts", (_req: Request, res: Response) => {
+  try {
+    const counts = getAllUnseenCounts();
+    res.json(counts);
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// POST /api/notifications/:id/seen — mark one notification as seen
+app.post("/api/notifications/:id/seen", (req: Request, res: Response) => {
+  try {
+    const notificationId = parseInt(req.params.id, 10);
+    const found = markNotificationSeen(notificationId);
+    if (!found) {
+      return res.status(404).json({ error: "Notification not found" });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// POST /api/notifications/mark-all-seen — mark all notifications as seen for a board
+app.post("/api/notifications/mark-all-seen", (req: Request, res: Response) => {
+  try {
+    const { board_id } = req.body as { board_id?: number };
+    if (!board_id) {
+      return res.status(400).json({ error: "board_id is required" });
+    }
+    const count = markAllNotificationsSeen(board_id);
+    res.json({ success: true, count });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// POST /api/sessions/:sessionId/notifications/seen — mark all notifications for a session as seen
+app.post("/api/sessions/:sessionId/notifications/seen", (req: Request, res: Response) => {
+  try {
+    const { sessionId } = req.params;
+    const count = markSessionNotificationsSeen(sessionId);
+    res.json({ success: true, count });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
 // ── Server-Sent Events (SSE) ────────────────────────────────
 
 app.get("/api/events", (req: Request, res: Response) => {
@@ -722,7 +1615,9 @@ app.get("/api/events", (req: Request, res: Response) => {
     handler({ type: "opencode_session_status", ...payload });
   };
   bus.on("opencode_session_status" as any, statusHandler as any);
-  cleanup.push(() => bus.off("opencode_session_status" as any, statusHandler as any));
+  cleanup.push(() =>
+    bus.off("opencode_session_status" as any, statusHandler as any),
+  );
 
   req.on("close", () => {
     cleanup.forEach((fn) => fn());
@@ -770,6 +1665,90 @@ app.get("/api/filesystem", (req: Request, res: Response) => {
   }
 });
 
+// File search for @ mentions
+app.get("/api/filesystem/search-files", (req: Request, res: Response) => {
+  try {
+    let dirPath = (req.query.directory as string) || "";
+    const query = ((req.query.query as string) || "").toLowerCase();
+
+    if (!dirPath) {
+      res.status(400).json({ error: "directory is required" });
+      return;
+    }
+
+    // Expand home directory
+    if (dirPath === "~" || dirPath.startsWith("~/")) {
+      dirPath = os.homedir() + dirPath.slice(1);
+    }
+
+    // Security: only allow absolute paths
+    if (!path.isAbsolute(dirPath)) {
+      res.status(400).json({ error: "Absolute path required" });
+      return;
+    }
+
+    const skipDirs = new Set([
+      "node_modules",
+      ".git",
+      "dist",
+      "build",
+      ".next",
+      ".cache",
+      "__pycache__",
+      ".tox",
+      ".venv",
+      "venv",
+      "target",
+      ".gradle",
+      ".idea",
+      ".vscode",
+      ".DS_Store",
+      "coverage",
+      ".turbo",
+    ]);
+
+    const files: Array<{ name: string; relativePath: string }> = [];
+    const MAX_RESULTS = 200;
+
+    try {
+      const entries = fs.readdirSync(dirPath, {
+        recursive: true,
+        withFileTypes: false,
+      }) as string[];
+
+      for (const entry of entries) {
+        if (files.length >= MAX_RESULTS) break;
+
+        // Skip hidden files/dirs
+        const parts = entry.split("/");
+        if (parts.some((p) => p.startsWith(".") || skipDirs.has(p))) continue;
+
+        const fullPath = path.join(dirPath, entry);
+        try {
+          const stat = fs.statSync(fullPath);
+          if (!stat.isFile()) continue;
+        } catch {
+          continue;
+        }
+
+        const relativePath = entry;
+        const name = path.basename(entry);
+
+        // Apply query filter
+        if (query && !relativePath.toLowerCase().includes(query)) continue;
+
+        files.push({ name, relativePath });
+      }
+    } catch {
+      // Directory may not exist or be unreadable
+    }
+
+    res.json({ files });
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message });
+  }
+});
+
 // ── General Settings ────────────────────────────────────────
 
 app.get("/api/settings", (_req: Request, res: Response) => {
@@ -785,7 +1764,9 @@ app.put("/api/settings", (req: Request, res: Response) => {
   try {
     const updates = req.body as Record<string, string>;
     if (!updates || typeof updates !== "object") {
-      return res.status(400).json({ error: "Object with key/value pairs required" });
+      return res
+        .status(400)
+        .json({ error: "Object with key/value pairs required" });
     }
     for (const [key, value] of Object.entries(updates)) {
       if (typeof key !== "string" || typeof value !== "string") continue;
@@ -803,7 +1784,10 @@ app.post("/api/reload", (_req: Request, res: Response) => {
   try {
     const projectRoot = path.join(__dirname, "..");
 
-    res.json({ success: true, message: "Rebuild started. Server will restart shortly." });
+    res.json({
+      success: true,
+      message: "Rebuild started. Server will restart shortly.",
+    });
 
     // Run build asynchronously after sending response
     exec("npm run build", { cwd: projectRoot }, (error, _stdout, stderr) => {
@@ -822,23 +1806,116 @@ app.post("/api/reload", (_req: Request, res: Response) => {
 
 // ── Compaction proxy ────────────────────────────────────────
 
-app.post("/api/sessions/:sessionId/compact", async (req: Request, res: Response) => {
+/** Extract providerID and modelID from a session's model data */
+function getSessionModelParts(
+  sessionId: string,
+): { providerID: string; modelID: string } | null {
+  const raw = getSessionModel(sessionId);
+  if (!raw) return null;
   try {
-    const { sessionId } = req.params;
-    const sessionDir = getSessionDirectory(sessionId);
-    const compactUrl = new URL(`${OPENCODE_SERVER}/session/${sessionId}/compact`);
-    if (sessionDir) compactUrl.searchParams.set("directory", sessionDir);
-    
-    const opencodeRes = await fetch(compactUrl.toString(), { method: "POST" });
-    if (!opencodeRes.ok) {
-      const body = await opencodeRes.text().catch(() => "");
-      return res.status(opencodeRes.status).json({ error: body || `opencode error ${opencodeRes.status}` });
+    // Model may already be an object { providerID, modelID }
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      parsed.providerID &&
+      parsed.modelID
+    ) {
+      return { providerID: parsed.providerID, modelID: parsed.modelID };
     }
-    res.json({ success: true });
-  } catch (err) {
-    res.status(502).json({ error: `opencode server unreachable: ${(err as Error).message}` });
+  } catch {}
+  // Fallback: if it's a dotted string like "provider.model"
+  if (typeof raw === "string" && raw.includes(".")) {
+    const idx = raw.indexOf(".");
+    return {
+      providerID: raw.substring(0, idx),
+      modelID: raw.substring(idx + 1),
+    };
   }
-});
+  return null;
+}
+
+app.post(
+  "/api/sessions/:sessionId/compact",
+  async (req: Request, res: Response) => {
+    try {
+      const { sessionId } = req.params;
+      const sessionDir = getSessionDirectory(sessionId);
+      const modelParts = getSessionModelParts(sessionId);
+      if (!modelParts) {
+        return res
+          .status(400)
+          .json({ error: "Cannot determine model for session" });
+      }
+
+      // Already compacting?
+      if (isSessionCompacting(sessionId)) {
+        return res.status(409).json({ error: "Session is already compacting" });
+      }
+
+      // Mark as compacting immediately (so kanban cards + polling reflect it)
+      setSessionCompacting(sessionId, true);
+
+      // Return 202 Accepted immediately — compaction runs in background
+      res.status(202).json({ success: true, status: "compacting" });
+
+      // Fire summarize asynchronously
+      const summarizeUrl = new URL(
+        `${OPENCODE_SERVER}/session/${sessionId}/summarize`,
+      );
+      if (sessionDir) summarizeUrl.searchParams.set("directory", sessionDir);
+
+      fetch(summarizeUrl.toString(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          providerID: modelParts.providerID,
+          modelID: modelParts.modelID,
+          auto: false,
+        }),
+      })
+        .then((opencodeRes) => {
+          if (!opencodeRes.ok) {
+            console.error(
+              `[compact] summarize failed for ${sessionId}: ${opencodeRes.status}`,
+            );
+          }
+        })
+        .catch((err) => {
+          console.error(
+            `[compact] summarize error for ${sessionId}:`,
+            err.message,
+          );
+        })
+        .finally(() => {
+          // Always clear the compacting flag
+          setSessionCompacting(sessionId, false);
+          console.log(`[compact] completed for ${sessionId}`);
+        });
+    } catch (err) {
+      // If headers not yet sent, send error; otherwise just log
+      if (!res.headersSent) {
+        res
+          .status(502)
+          .json({
+            error: `opencode server unreachable: ${(err as Error).message}`,
+          });
+      }
+      // Clear compacting flag if we set it
+      const { sessionId } = req.params;
+      if (sessionId) setSessionCompacting(sessionId, false);
+    }
+  },
+);
+
+app.get(
+  "/api/sessions/:sessionId/compacting",
+  async (_req: Request, res: Response) => {
+    const { sessionId } = _req.params;
+    const compacting = isSessionCompacting(sessionId);
+    res.json({ compacting });
+  },
+);
 
 // ── Auto-compact monitor ──────────────────────────────────────
 
@@ -849,13 +1926,16 @@ let contextLimitsFetchedAt = 0;
 async function fetchContextLimits(): Promise<Record<string, number>> {
   const now = Date.now();
   // Cache for 5 minutes
-  if (now - contextLimitsFetchedAt < 300000 && Object.keys(cachedContextLimits).length > 0) {
+  if (
+    now - contextLimitsFetchedAt < 300000 &&
+    Object.keys(cachedContextLimits).length > 0
+  ) {
     return cachedContextLimits;
   }
   try {
     const res = await fetch(`${OPENCODE_SERVER}/provider`);
     if (!res.ok) return cachedContextLimits;
-    const data = await res.json() as {
+    const data = (await res.json()) as {
       all: Array<{
         id: string;
         models: Record<string, { limit?: { context?: number } }>;
@@ -893,18 +1973,34 @@ async function checkAutoCompact(): Promise<void> {
       const tokens = getSessionTokens(session.id);
       if (tokens <= 0) continue;
 
-      const model = getSessionModel(session.id);
-      if (!model) continue;
+      const modelParts = getSessionModelParts(session.id);
+      if (!modelParts) continue;
 
-      const limit = limits[model];
+      const limit = limits[modelParts.modelID];
       if (!limit || limit <= 0) continue;
 
       const ratio = tokens / limit;
       if (ratio >= threshold / 100) {
         // Trigger compaction via opencode API
-        const compactUrl = new URL(`${OPENCODE_SERVER}/session/${session.id}/compact`);
-        if (session.directory) compactUrl.searchParams.set("directory", session.directory);
-        await fetch(compactUrl.toString(), { method: "POST" }).catch(() => {});
+        const compactUrl = new URL(
+          `${OPENCODE_SERVER}/session/${session.id}/summarize`,
+        );
+        if (session.directory)
+          compactUrl.searchParams.set("directory", session.directory);
+        setSessionCompacting(session.id, true);
+        await fetch(compactUrl.toString(), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            providerID: modelParts.providerID,
+            modelID: modelParts.modelID,
+            auto: true,
+          }),
+        })
+          .catch(() => {})
+          .finally(() => {
+            setSessionCompacting(session.id, false);
+          });
       }
     } catch {
       // non-critical per-session failure
@@ -960,11 +2056,38 @@ function subscribeToOpencodeEvents() {
             if (line.startsWith("data: ")) {
               try {
                 const eventData = JSON.parse(line.slice(6));
-                if (eventData.type === "session.status" && eventData.properties?.sessionID) {
-                  bus.emit("opencode_session_status" as any, {
-                    sessionID: eventData.properties.sessionID,
-                    status: eventData.properties.status,
-                  } as any);
+                if (
+                  eventData.type === "session.status" &&
+                  eventData.properties?.sessionID
+                ) {
+                  const sessionID = eventData.properties.sessionID;
+                  const currentStatus = eventData.properties.status?.type || eventData.properties.status;
+                  const previousStatus = previousSessionStatuses.get(sessionID);
+
+                  bus.emit(
+                    "opencode_session_status" as any,
+                    {
+                      sessionID,
+                      status: eventData.properties.status,
+                    } as any,
+                  );
+
+                  // Auto-notification: detect busy/retry → idle transition
+                  if (
+                    previousStatus &&
+                    (previousStatus === "busy" || previousStatus === "retry") &&
+                    currentStatus === "idle"
+                  ) {
+                    try {
+                      const boardId = getNotificationBoardForSession(sessionID);
+                      if (boardId) {
+                        createNotification(boardId, sessionID, "iteration_complete", "");
+                      }
+                    } catch {
+                      // non-critical: notification creation failed
+                    }
+                  }
+                  previousSessionStatuses.set(sessionID, currentStatus);
                 }
               } catch {
                 // ignore parse errors
@@ -996,7 +2119,26 @@ function subscribeToOpencodeEvents() {
   }
 }
 
+// Track previous session statuses for auto-notification detection
+const previousSessionStatuses = new Map<string, string>();
+
 subscribeToOpencodeEvents();
+
+// Auto-notification: when a subtask is completed or failed, create a notification
+bus.on("subtask_updated" as any, (payload: any) => {
+  try {
+    const { session_id, status } = payload as { session_id: string; status: string };
+    if (status === "completed" || status === "failed") {
+      const boardId = getNotificationBoardForSession(session_id);
+      if (boardId) {
+        const type = status === "completed" ? "subtask_complete" : "task_failed";
+        createNotification(boardId, session_id, type, "");
+      }
+    }
+  } catch {
+    // non-critical: notification creation failed
+  }
+});
 
 // ── Static Files & SPA Fallback ────────────────────────────
 
