@@ -667,27 +667,6 @@ export function getBoardFull(boardId: number): BoardFull {
     )
     .all() as any[];
 
-  // Get epic associations for all sessions
-  const sessionIds = sessions.map((s: any) => s.id);
-  const epicMap = new Map<string, string>();
-  if (sessionIds.length > 0) {
-    const placeholders = sessionIds.map(() => '?').join(',');
-    // Check spawned sessions
-    const epicRows = db.prepare(
-      `SELECT es.session_id, e.task_key FROM kanban_epic_sessions es JOIN kanban_epics e ON e.id = es.epic_id WHERE es.session_id IN (${placeholders})`
-    ).all(...sessionIds) as { session_id: string; task_key: string }[];
-    for (const row of epicRows) {
-      epicMap.set(row.session_id, row.task_key);
-    }
-    // Check planner sessions
-    const plannerRows = db.prepare(
-      `SELECT planner_session_id, task_key FROM kanban_epics WHERE planner_session_id IN (${placeholders})`
-    ).all(...sessionIds) as { planner_session_id: string; task_key: string }[];
-    for (const row of plannerRows) {
-      epicMap.set(row.planner_session_id, row.task_key);
-    }
-  }
-
   const nowMs = Date.now();
   const cards: Card[] = [];
 
@@ -721,7 +700,6 @@ export function getBoardFull(boardId: number): BoardFull {
       column_name: columnName,
       subtasks: [],
       agent_logs: [],
-      epic_task_key: epicMap.get(session.id),
     });
   }
 
@@ -731,13 +709,7 @@ export function getBoardFull(boardId: number): BoardFull {
     card.agent_logs = getAgentLogs(card.session_id);
   }
 
-  // Fetch epics for the board
-  const epics = getEpicsByBoard(boardId);
-  for (const epic of epics) {
-    epic.sessions = getEpicSessions(epic.id);
-  }
-
-  return { board, columns, cards, epics };
+  return { board, columns, cards };
 }
 
 // ── Session messages functions ──────────────────────────────────────────────
