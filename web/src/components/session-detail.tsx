@@ -1048,6 +1048,8 @@ const MessageRow = memo(function MessageRow({
   sessionId,
   directory,
   onAnswerSubmitted,
+  isBusy,
+  isLastAssistant,
 }: {
   msg: Message;
   prevMsg?: Message;
@@ -1059,6 +1061,8 @@ const MessageRow = memo(function MessageRow({
   sessionId: string;
   directory: string | null;
   onAnswerSubmitted: () => void;
+  isBusy?: boolean;
+  isLastAssistant?: boolean;
 }) {
   const isTurnEnd =
     msg.role === "assistant" && (isLast || nextMsg?.role === "user");
@@ -1090,17 +1094,32 @@ const MessageRow = memo(function MessageRow({
       </div>
 
       {/* Thinking */}
-      {msg.reasoning && (
+      {(msg.reasoning || (isBusy && isLastAssistant)) && (
         <Collapsible defaultOpen>
           <CollapsibleTrigger asChild>
             <button className="flex items-center gap-1.5 text-xs text-muted-foreground/70 hover:text-muted-foreground transition-colors py-0.5">
               <ChevronDown className="w-3 h-3" />
-              Thinking…
+              {isBusy && isLastAssistant ? (
+                <span className="flex items-center gap-1">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  <span>Thinking</span>
+                  <span className="inline-flex gap-0.5">
+                    <span className="animate-[bounce_1s_ease-in-out_infinite]">.</span>
+                    <span className="animate-[bounce_1s_ease-in-out_0.15s_infinite]">.</span>
+                    <span className="animate-[bounce_1s_ease-in-out_0.3s_infinite]">.</span>
+                  </span>
+                </span>
+              ) : (
+                <span>Thinking…</span>
+              )}
             </button>
           </CollapsibleTrigger>
           <CollapsibleContent>
             <div className="text-xs text-muted-foreground/60 italic pl-4 py-1 border-l-2 border-muted whitespace-pre-wrap">
-              {msg.reasoning}
+              {msg.reasoning || ""}
+              {isBusy && isLastAssistant && msg.reasoning && (
+                <span className="inline-block w-1.5 h-3 bg-muted-foreground/40 animate-pulse ml-0.5 align-text-bottom" />
+              )}
             </div>
           </CollapsibleContent>
         </Collapsible>
@@ -2768,6 +2787,7 @@ export default function SessionDetail({
                 lastPrevMsg &&
                 lastTailMsg.id === lastPrevMsg.id &&
                 lastTailMsg.text === lastPrevMsg.text &&
+                lastTailMsg.reasoning === lastPrevMsg.reasoning &&
                 toolStatusEqual
               ) {
                 // No meaningful changes detected, skip update
@@ -2838,9 +2858,9 @@ export default function SessionDetail({
       }
     };
 
-    // Determine interval based on session status: 1000ms when busy, 2000ms when idle
+    // Determine interval based on session status: 500ms when busy, 2000ms when idle
     // Use ref to avoid stale closure issues with isBusy
-    const pollInterval = isBusyRef.current ? 1000 : 2000;
+    const pollInterval = isBusyRef.current ? 500 : 2000;
 
     const interval = setInterval(poll, pollInterval);
 
@@ -3106,6 +3126,8 @@ export default function SessionDetail({
                         onViewChild={handleViewChild}
                         sessionId={activeChildId || sessionId || ""}
                         directory={data?.directory ?? null}
+                        isBusy={isBusy}
+                        isLastAssistant={msg.role === "assistant" && isLast}
                         onAnswerSubmitted={() => {
                           // Trigger a poll to refresh messages
                           waitingForResponseRef.current = true;

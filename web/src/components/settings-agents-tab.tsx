@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import ReactDOM from "react-dom";
+
 import { Bot, Cpu, Save, Loader2, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -112,37 +112,38 @@ function AgentCard({ agent, content, fileExists, isDirty, isSaving, canDelete, i
       </div>
 
       {/* Delete confirmation dialog */}
-      {confirmDelete &&
-        ReactDOM.createPortal(
-          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50">
-            <div className="bg-popover text-popover-foreground rounded-lg border p-4 shadow-lg max-w-sm mx-4 space-y-3">
-              <h3 className="font-semibold text-sm">Delete agent</h3>
-              <p className="text-sm text-muted-foreground">
-                Delete the <strong className="capitalize">{agent.name}</strong> agent? This will remove its configuration file. The agent may still appear if it's registered by opencode.
-              </p>
-              <div className="flex justify-end gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setConfirmDelete(false)}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={() => {
-                    setConfirmDelete(false);
-                    onDelete(agent.name);
-                  }}
-                >
-                  Delete
-                </Button>
-              </div>
+      {confirmDelete && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50"
+          onPointerDownOutside={(e) => e.preventDefault()}
+        >
+          <div className="bg-popover text-popover-foreground rounded-lg border p-4 shadow-lg max-w-sm mx-4 space-y-3">
+            <h3 className="font-semibold text-sm">Delete agent</h3>
+            <p className="text-sm text-muted-foreground">
+              Delete the <strong className="capitalize">{agent.name}</strong> agent? This will remove its configuration file. The agent may still appear if it's registered by opencode.
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setConfirmDelete(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => {
+                  setConfirmDelete(false);
+                  onDelete(agent.name);
+                }}
+              >
+                Delete
+              </Button>
             </div>
-          </div>,
-          document.body,
-        )}
+          </div>
+        </div>
+      )}
     </>
   );
 }
@@ -201,19 +202,27 @@ export function useAgentsData() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const [hiddenAgents, setHiddenAgents] = useState<string[]>([]);
+
   useEffect(() => {
     const fetchAgents = async () => {
       try {
         setLoading(true);
         setError(null);
-        const res = await fetch("/api/opencode/agent");
-        if (!res.ok) throw new Error(`Failed to fetch agents: ${res.status}`);
-        const data = await res.json();
+        const [agentRes, hiddenRes] = await Promise.all([
+          fetch("/api/opencode/agent"),
+          fetch("/api/agents/hidden"),
+        ]);
+        if (!agentRes.ok) throw new Error(`Failed to fetch agents: ${agentRes.status}`);
+        const data = await agentRes.json();
+        const hiddenData = hiddenRes.ok ? await hiddenRes.json() : { hidden: [] };
+        const hidden = (hiddenData.hidden || []) as string[];
+        setHiddenAgents(hidden);
         setAgents(data || []);
 
         // Fetch file content for each visible agent in parallel
         const entries = (data || [])
-          .filter((a: AgentInfo) => a.hidden !== true)
+          .filter((a: AgentInfo) => a.hidden !== true && !hidden.includes(a.name))
           .map(async (agent: AgentInfo) => {
             try {
               const fileRes = await fetch(`/api/agents/${agent.name}/file`);
@@ -308,8 +317,9 @@ export function useAgentsData() {
     }
   }, []);
 
-  const primaryAgents = agents.filter((a) => a.mode === "primary" && a.hidden !== true);
-  const subagents = agents.filter((a) => a.mode === "subagent" && a.hidden !== true);
+  const visibleAgents = agents.filter((a) => a.hidden !== true && !hiddenAgents.includes(a.name));
+  const primaryAgents = visibleAgents.filter((a) => a.mode === "primary");
+  const subagents = visibleAgents.filter((a) => a.mode === "subagent");
 
   return {
     loading,

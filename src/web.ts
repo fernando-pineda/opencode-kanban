@@ -14,6 +14,46 @@ import { exec, execFile } from "child_process";
 const OPENCODE_SERVER =
   process.env.OPENCODE_SERVER_URL || "http://127.0.0.1:4096";
 
+// ── Hidden agents management ──────────────────────────────
+const HIDDEN_AGENTS_PATH = path.join(
+  os.homedir(),
+  ".config/opencode/agents",
+  ".hidden-agents.json",
+);
+
+function getHiddenAgents(): string[] {
+  try {
+    if (fs.existsSync(HIDDEN_AGENTS_PATH)) {
+      const data = fs.readFileSync(HIDDEN_AGENTS_PATH, "utf-8");
+      return JSON.parse(data);
+    }
+  } catch {
+    // ignore
+  }
+  return [];
+}
+
+function setHiddenAgents(names: string[]): void {
+  const dir = path.dirname(HIDDEN_AGENTS_PATH);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  fs.writeFileSync(HIDDEN_AGENTS_PATH, JSON.stringify(names, null, 2), "utf-8");
+}
+
+function hideAgent(name: string): void {
+  const hidden = getHiddenAgents();
+  if (!hidden.includes(name)) {
+    hidden.push(name);
+    setHiddenAgents(hidden);
+  }
+}
+
+function unhideAgent(name: string): void {
+  const hidden = getHiddenAgents().filter((n) => n !== name);
+  setHiddenAgents(hidden);
+}
+
 function getSessionDirectory(sessionId: string): string | null {
   try {
     const row = getDb()
@@ -263,6 +303,15 @@ app.put("/api/agents/:name/file", (req: Request, res: Response) => {
   }
 });
 
+// GET /api/agents/hidden - Get list of hidden agent names
+app.get("/api/agents/hidden", (_req: Request, res: Response) => {
+  try {
+    res.json({ hidden: getHiddenAgents() });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
 // DELETE /api/agents/:name/file - Delete agent markdown file
 app.delete("/api/agents/:name/file", (req: Request, res: Response) => {
   try {
@@ -281,14 +330,12 @@ app.delete("/api/agents/:name/file", (req: Request, res: Response) => {
     );
 
     try {
-      // Check if file exists
-      if (!fs.existsSync(filePath)) {
-        res.status(404).json({ error: "Agent file not found" });
-        return;
+      // Delete the .md file if it exists
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
       }
-
-      // Delete the file
-      fs.unlinkSync(filePath);
+      // Always hide from agent list
+      hideAgent(name);
       res.json({ success: true, name });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
@@ -514,80 +561,6 @@ app.post(
     }
   },
 );
-
-// ── Project Summary ────────────────────────────────────────
-app.post("/api/project-summary", async (req: Request, res: Response) => {
-  try {
-    const { directory } = req.body as { directory?: string };
-    if (!directory) {
-      res.status(400).json({ error: "directory is required" });
-      return;
-    }
-
-    // 1. Create session directly via opencode (bypasses kanban card creation)
-    const sessionUrl = new URL(`${OPENCODE_SERVER}/session`);
-    sessionUrl.searchParams.set("directory", directory);
-    const sessionRes = await fetch(sessionUrl.toString(), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    if (!sessionRes.ok) {
-      const body = await sessionRes.text().catch(() => "");
-      res
-        .status(sessionRes.status)
-        .json({ error: body || `opencode error ${sessionRes.status}` });
-      return;
-    }
-    const session = await sessionRes.json();
-
-    // 2. Update session directory in kanban DB so getSessionMessages works
-    try {
-      const db = getDb();
-      db.prepare("UPDATE session SET directory = ?, path = ? WHERE id = ?").run(
-        directory,
-        directory.replace(/^\//, ""),
-        session.id,
-      );
-    } catch {
-      // non-critical
-    }
-
-    // 3. Send the summary prompt via prompt_async (non-blocking)
-    const promptUrl = new URL(
-      `${OPENCODE_SERVER}/session/${session.id}/prompt_async`,
-    );
-    promptUrl.searchParams.set("directory", directory);
-    const promptRes = await fetch(promptUrl.toString(), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        parts: [
-          {
-            type: "text",
-            text: "Provide a concise project summary for this codebase. Include: purpose, tech stack, architecture, key modules, and current state. Be thorough but concise. Use markdown formatting.",
-          },
-        ],
-      }),
-    });
-    if (!promptRes.ok) {
-      const body = await promptRes.text().catch(() => "");
-      res
-        .status(promptRes.status)
-        .json({ error: body || `opencode prompt error ${promptRes.status}` });
-      return;
-    }
-
-    // 4. Return session ID — frontend will poll messages
-    res.json({ session_id: session.id });
-  } catch (err) {
-    res
-      .status(502)
-      .json({
-        error: `opencode server unreachable: ${(err as Error).message}`,
-      });
-  }
-});
 
 // ── REST API Routes ─────────────────────────────────────────
 

@@ -3,10 +3,9 @@
 import React, { useState } from 'react'
 import { BoardFull } from '../types'
 import KanbanColumn from './kanban-column'
-import ProjectSummarySheet from './project-summary-sheet'
 import MemoriesSheet from './memories-sheet'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { Brain, PlusCircle, FileText } from 'lucide-react'
+import { Brain, PlusCircle } from 'lucide-react'
 
 interface KanbanBoardProps {
   board: BoardFull
@@ -16,7 +15,6 @@ interface KanbanBoardProps {
 }
 
 export default function KanbanBoard({ board, onCardClick, onNewSession, onEpicClick }: KanbanBoardProps) {
-  const [summaryOpen, setSummaryOpen] = useState(false)
   const [memoriesOpen, setMemoriesOpen] = useState(false)
 
   return (
@@ -32,7 +30,6 @@ export default function KanbanBoard({ board, onCardClick, onNewSession, onEpicCl
             {[
               { icon: Brain, label: 'Memories', onClick: () => setMemoriesOpen(true) },
               { icon: PlusCircle, label: 'New Session', onClick: onNewSession || (() => {}) },
-              { icon: FileText, label: 'Project Summary', onClick: () => setSummaryOpen(true) },
             ].map(({ icon: Icon, label, onClick }) => (
               <Tooltip key={label}>
                 <TooltipTrigger asChild>
@@ -70,12 +67,6 @@ export default function KanbanBoard({ board, onCardClick, onNewSession, onEpicCl
           })}
         </div>
       </div>
-
-      <ProjectSummarySheet
-        directory={board.board.repo_path}
-        open={summaryOpen}
-        onOpenChange={setSummaryOpen}
-      />
 
       <MemoriesSheet
         repoPath={board.board.repo_path}
