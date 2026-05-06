@@ -56,7 +56,7 @@ export default function KanbanColumn({
     <div
       ref={setNodeRef}
       className={`flex flex-col w-80 h-full min-h-0 flex-shrink-0 rounded-lg transition-colors ${
-        isOver ? "bg-accent/30 ring-2 ring-primary/20 ring-inset" : ""
+        showGap ? "bg-accent/30 ring-2 ring-primary/20 ring-inset" : ""
       }`}
     >
       {/* Column Header */}
