@@ -8,7 +8,7 @@ A **Kanban board + Memory + Knowledge system** for AI agents. Provides an MCP se
 ## 🚀 Quick Start
 
 ```bash
-git clone https://github.com/nicobailon/opencode-kanban.git
+git clone https://github.com/fernando-pineda/opencode-kanban.git
 cd opencode-kanban
 ./install.sh
 ```
@@ -22,6 +22,39 @@ The installer handles everything:
 - ✅ Verifies the installation
 
 Re-run `./install.sh` after pulling updates (idempotent). Use `--force` to overwrite agent files.
+
+## 💡 Why?
+
+### The terminal is expensive
+
+Modern terminal emulators are GPU-accelerated applications. Ghostty uses **Metal rendering on macOS** and **OpenGL on Linux** with multi-threaded read/write/render pipelines per terminal session. That's a dedicated GPU compositor running just to display text — and it shows in your battery life.
+
+As a developer, your browser is already open all day: docs, PRs, dashboards, CI logs, Linear tickets. opencode-kanban moves your agent conversations into **a browser tab** — no GPU overhead, no extra battery drain, no window management. One tab. One dashboard.
+
+### Real swarm orchestration
+
+Most AI coding tools are single-agent: you ask, it responds, one conversation at a time. Anthropic's [Building Effective Agents](https://www.anthropic.com/research/building-effective-agents) research identifies the **orchestrator-workers pattern** — where a central agent dynamically decomposes tasks and delegates them to parallel workers — as one of the most effective architectures for complex coding tasks.
+
+opencode-kanban makes this pattern first-class:
+
+1. You describe a task to the **planner** agent
+2. The planner breaks it into parallel subtasks
+3. Each subtask **spawns its own agent session** — its own conversation, its own git worktree, its own model
+4. Agents execute simultaneously, each working on a different part of your codebase
+5. The kanban board tracks every agent, every branch, every file change — **in real time**
+
+This isn't sequential hand-offs. This is true parallel execution with live observability.
+
+### Visibility into the black box
+
+When an AI agent modifies your codebase, you need to know:
+
+- **What is each agent doing right now?** — Board columns show live status
+- **What decisions did it make?** — Memory system captures decisions, findings, and patterns across sessions
+- **What files did it change?** — Each card tracks its git branch and diffs
+- **Can I trust the result?** — Full agent logs, subtask tracking, and session history
+
+The terminal is great for quick edits. But when you're orchestrating 3–5 agents working in parallel across your codebase, you need a **dashboard** — not five terminal panes you can't keep track of.
 
 ## 🎯 What It Does
 
