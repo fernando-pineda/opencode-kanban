@@ -1,6 +1,6 @@
 {
   "name": "opencode-kanban",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "description": "MCP-backed Kanban board for tracking opencode agent/subagent progress",
   "type": "module",
   "main": "src/index.js",
