@@ -34,7 +34,6 @@ export interface Card {
   // Populated by getBoardFull
   subtasks?: Subtask[];
   agent_logs?: AgentLog[];
-  epic_task_key?: string;
 }
 
 export interface Subtask {
@@ -109,7 +108,6 @@ export interface BoardFull {
   board: Board;
   columns: Column[];
   cards: Card[];
-  epics: Epic[];
 }
 
 export interface Rule {

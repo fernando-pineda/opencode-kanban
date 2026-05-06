@@ -463,22 +463,6 @@ export function getBoardFull(boardId) {
     const sessions = db
         .prepare("SELECT id, directory, title, time_created, time_updated, time_compacting FROM session WHERE parent_id IS NULL AND id NOT IN (SELECT session_id FROM kanban_deleted_sessions) ORDER BY time_updated DESC")
         .all();
-    // Get epic associations for all sessions
-    const sessionIds = sessions.map((s) => s.id);
-    const epicMap = new Map();
-    if (sessionIds.length > 0) {
-        const placeholders = sessionIds.map(() => '?').join(',');
-        // Check spawned sessions
-        const epicRows = db.prepare(`SELECT es.session_id, e.task_key FROM kanban_epic_sessions es JOIN kanban_epics e ON e.id = es.epic_id WHERE es.session_id IN (${placeholders})`).all(...sessionIds);
-        for (const row of epicRows) {
-            epicMap.set(row.session_id, row.task_key);
-        }
-        // Check planner sessions
-        const plannerRows = db.prepare(`SELECT planner_session_id, task_key FROM kanban_epics WHERE planner_session_id IN (${placeholders})`).all(...sessionIds);
-        for (const row of plannerRows) {
-            epicMap.set(row.planner_session_id, row.task_key);
-        }
-    }
     const nowMs = Date.now();
     const cards = [];
     for (const session of sessions) {
@@ -504,7 +488,6 @@ export function getBoardFull(boardId) {
             column_name: columnName,
             subtasks: [],
             agent_logs: [],
-            epic_task_key: epicMap.get(session.id),
         });
     }
     // Attach subtasks and logs to each card
@@ -512,12 +495,7 @@ export function getBoardFull(boardId) {
         card.subtasks = getSubtasks(card.session_id);
         card.agent_logs = getAgentLogs(card.session_id);
     }
-    // Fetch epics for the board
-    const epics = getEpicsByBoard(boardId);
-    for (const epic of epics) {
-        epic.sessions = getEpicSessions(epic.id);
-    }
-    return { board, columns, cards, epics };
+    return { board, columns, cards };
 }
 export function getSessionMessages(sessionId, limit = 50, offset = 0) {
     // Get session directory

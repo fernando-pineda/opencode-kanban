@@ -11,10 +11,9 @@ interface KanbanBoardProps {
   board: BoardFull
   onCardClick?: (sessionId: string) => void
   onNewSession?: () => void
-  onEpicClick?: (epicId: number) => void
 }
 
-export default function KanbanBoard({ board, onCardClick, onNewSession, onEpicClick }: KanbanBoardProps) {
+export default function KanbanBoard({ board, onCardClick, onNewSession }: KanbanBoardProps) {
   const [memoriesOpen, setMemoriesOpen] = useState(false)
 
   return (
@@ -59,9 +58,7 @@ export default function KanbanBoard({ board, onCardClick, onNewSession, onEpicCl
                 key={column.id}
                 column={column}
                 cards={columnCards}
-                epics={(board.epics || []).filter(e => e.column_name === column.name)}
                 onCardClick={onCardClick}
-                onEpicClick={onEpicClick}
               />
             )
           })}

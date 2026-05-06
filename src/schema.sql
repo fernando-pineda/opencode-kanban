@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS kanban_settings (
 
 CREATE INDEX IF NOT EXISTS idx_kanban_settings_key ON kanban_settings(key);
 
--- Epics: swarm/epic tracking with task keys
+-- Epics: epic tracking with task keys
 CREATE TABLE IF NOT EXISTS kanban_epics (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   board_id INTEGER NOT NULL REFERENCES kanban_boards(id) ON DELETE CASCADE,

@@ -6,7 +6,6 @@ import KanbanBoard from "./components/kanban-board";
 import BoardSidebar from "./components/board-sidebar";
 import TerminalPanel from "./components/terminal-panel";
 import SessionDetail from "./components/session-detail";
-import SwarmStatusPanel from "./components/swarm-status-panel";
 import { useKanban } from "./hooks/use-kanban";
 import { NotificationProvider } from "./hooks/use-notifications";
 
@@ -27,7 +26,6 @@ function App() {
   const activeBoardIdRef = useRef<number | null>(null);
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
   const [newSessionDir, setNewSessionDir] = useState<string | null>(null);
-  const [selectedEpicId, setSelectedEpicId] = useState<number | null>(null);
 
   // Keep activeBoardId ref in sync
   useEffect(() => {
@@ -71,12 +69,6 @@ function App() {
     setSelectedSession(sid);
   };
 
-  const handleEpicCreated = (epicId: number) => {
-    setSelectedEpicId(epicId);
-    setSelectedSession(null);
-    setNewSessionDir(null);
-  };
-
   return (
     <NotificationProvider activeBoardId={activeBoard?.board.id ?? null}>
       <SidebarProvider className="h-full overflow-hidden">
@@ -97,14 +89,8 @@ function App() {
                 onCardClick={(id) => {
                   setSelectedSession(id);
                   setNewSessionDir(null);
-                  setSelectedEpicId(null);
                 }}
                 onNewSession={handleNewSession}
-                onEpicClick={(epicId) => {
-                  setSelectedEpicId(epicId);
-                  setSelectedSession(null);
-                  setNewSessionDir(null);
-                }}
               />
             ) : (
               <div className="flex items-center justify-center h-full">
@@ -147,21 +133,8 @@ function App() {
           newSessionDirectory={newSessionDir}
           onSessionCreated={handleSessionCreated}
           boardId={activeBoard?.board.id ?? null}
-          onEpicCreated={handleEpicCreated}
         />
 
-        <SwarmStatusPanel
-          epicId={selectedEpicId || 0}
-          open={!!selectedEpicId && !selectedSession}
-          onOpenChange={(open) => {
-            if (!open) setSelectedEpicId(null);
-          }}
-          onSessionClick={(sessionId) => {
-            setSelectedSession(sessionId);
-            setSelectedEpicId(null);
-          }}
-          boardDirectory={activeBoard?.board.repo_path}
-        />
       </SidebarProvider>
     </NotificationProvider>
   );

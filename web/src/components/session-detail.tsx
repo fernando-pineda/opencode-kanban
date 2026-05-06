@@ -122,7 +122,6 @@ interface SessionDetailProps {
   newSessionDirectory?: string | null;
   onSessionCreated?: (sessionId: string) => void;
   boardId?: number | null;
-  onEpicCreated?: (epicId: number) => void;
 }
 
 /* ── Helpers ───────────────────────────────────────────── */
@@ -154,30 +153,11 @@ function stripMandatoryTags(text: string | undefined | null): string {
   return text.replace(/<mandatory>[\s\S]*?<\/mandatory>\s*/g, "").trim();
 }
 
-function extractSwarmPlan(
-  text: string,
-): Array<{ title: string; description: string }> | null {
-  const match = text.match(/<swarm-plan>([\s\S]*?)<\/swarm-plan>/);
-  if (!match) return null;
-  try {
-    let parsed = JSON.parse(match[1].trim());
-    if (!Array.isArray(parsed) && typeof parsed === "object" && parsed.subtasks) {
-      parsed = parsed.subtasks;
-    }
-    if (Array.isArray(parsed) && parsed.length >= 2 && parsed.every((s: any) => s.title)) {
-      return parsed.map((s: any) => ({
-        title: String(s.title),
-        description: String(s.description || ""),
-      }));
-    }
-  } catch {}
-  return null;
-}
-
-/** Strip <swarm-plan>…</swarm-plan> blocks from displayed text, returning clean markdown */
+/** Strip <swarm-plan>…</swarm-plan> blocks from displayed text */
 function stripSwarmPlanTags(text: string): string {
   return text.replace(/<swarm-plan>[\s\S]*?<\/swarm-plan>/g, "").trim();
 }
+
 
 function extractTaskId(output: string): string | null {
   if (!output) return null;
@@ -518,54 +498,6 @@ const StatusCard = memo(function StatusCard({ data }: { data: StatusMessage }) {
           </p>
         </div>
       )}
-    </div>
-  );
-});
-
-const SwarmPlanCard = memo(function SwarmPlanCard({
-  subtasks,
-}: {
-  subtasks: Array<{ title: string; description: string }>;
-}) {
-  return (
-    <div className="rounded-lg border overflow-hidden my-2 border-amber-500/30 bg-amber-500/5">
-      {/* Header */}
-      <div className="flex items-center gap-2 px-3 py-2 bg-amber-500/10">
-        <span className="text-sm">🐝</span>
-        <span className="text-xs font-semibold text-amber-600 dark:text-amber-400">
-          Swarm Plan
-        </span>
-        <Badge
-          variant="secondary"
-          className="text-[10px] bg-amber-500/20 text-amber-600 dark:text-amber-400 border-0 ml-auto"
-        >
-          {subtasks.length} subtasks
-        </Badge>
-      </div>
-
-      {/* Subtask list */}
-      <div className="divide-y divide-border/50">
-        {subtasks.map((subtask, i) => (
-          <div key={i} className="px-3 py-2 flex gap-2.5">
-            <div className="flex flex-col items-center gap-0.5 pt-0.5">
-              <span className="flex items-center justify-center w-5 h-5 rounded-full bg-amber-500/15 text-[10px] font-bold text-amber-600 dark:text-amber-400 shrink-0">
-                {i + 1}
-              </span>
-              {i < subtasks.length - 1 && (
-                <div className="w-px flex-1 bg-amber-500/20 min-h-1" />
-              )}
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-xs font-medium text-foreground leading-snug">
-                {subtask.title}
-              </p>
-              <p className="text-[11px] text-muted-foreground leading-relaxed mt-0.5 line-clamp-3">
-                {subtask.description}
-              </p>
-            </div>
-          </div>
-        ))}
-      </div>
     </div>
   );
 });
@@ -1132,32 +1064,6 @@ const MessageRow = memo(function MessageRow({
           const entireStatus =
             msg.role === "assistant" ? tryParseStatusJson(msg.text) : null;
 
-          // Check for swarm plan in assistant messages
-          const swarmPlan =
-            msg.role === "assistant" ? extractSwarmPlan(msg.text) : null;
-
-          // For messages with swarm plan: show surrounding text as markdown + the plan card
-          if (swarmPlan) {
-            const cleanText = stripSwarmPlanTags(msg.text);
-            return (
-              <div className="relative group text-foreground">
-                {cleanText && (
-                  <div className="rounded-lg px-3 py-2">
-                    <div className="text-sm">
-                      <MarkdownContent content={cleanText} />
-                    </div>
-                  </div>
-                )}
-                <div className="px-3">
-                  <SwarmPlanCard subtasks={swarmPlan} />
-                </div>
-                <div className="absolute top-1 right-1">
-                  <CopyButton text={msg.text} />
-                </div>
-              </div>
-            );
-          }
-
           return (
             <div
               className={cn(
@@ -1174,8 +1080,8 @@ const MessageRow = memo(function MessageRow({
                   <MarkdownContent
                     content={
                       msg.role === "user"
-                        ? stripMandatoryTags(msg.text)
-                        : msg.text
+                        ? stripSwarmPlanTags(stripMandatoryTags(msg.text))
+                        : stripSwarmPlanTags(msg.text || "")
                     }
                     className={cn(
                       msg.role === "user" &&
@@ -1495,9 +1401,6 @@ interface ChatInputProps {
   onClose: () => void;
   data: SessionData | null;
   directory: string | null;
-  isSwarmAvailable?: boolean;
-  swarmEnabled?: boolean;
-  onSwarmToggle?: (enabled: boolean) => void;
 }
 
 const LINE_HEIGHT = 20;
@@ -1527,9 +1430,6 @@ const ChatInput = memo(function ChatInput({
   onClose,
   data,
   directory,
-  isSwarmAvailable,
-  swarmEnabled,
-  onSwarmToggle,
 }: ChatInputProps) {
   const [inputValue, setInputValue] = useState("");
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -1798,7 +1698,7 @@ const ChatInput = memo(function ChatInput({
             )}
           </div>
 
-          {/* Right side: context tokens + model name + Done button + swarm toggle */}
+          {/* Right side: context tokens + model name + Done button */}
           <div className="flex items-center gap-2">
             {data &&
               (() => {
@@ -1928,23 +1828,6 @@ const ChatInput = memo(function ChatInput({
                 </PopoverContent>
               </Popover>
             )}
-            {isSwarmAvailable && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div>
-                    <Switch
-                      checked={swarmEnabled}
-                      onCheckedChange={onSwarmToggle}
-                      thumb={<span>🐝</span>}
-                      className="data-[state=checked]:bg-amber-500 data-[state=unchecked]:bg-white"
-                    />
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent side="top" sideOffset={6} className="text-xs">
-                  {swarmEnabled ? "SWARM ON" : "SWARM OFF"}
-                </TooltipContent>
-              </Tooltip>
-            )}
           </div>
         </div>
       </div>
@@ -1961,7 +1844,6 @@ export default function SessionDetail({
   newSessionDirectory,
   onSessionCreated,
   boardId,
-  onEpicCreated,
 }: SessionDetailProps) {
   const [data, setData] = useState<SessionData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -2004,40 +1886,6 @@ export default function SessionDetail({
   const [mounted, setMounted] = useState(false);
   const [visible, setVisible] = useState(false);
   const [compacting, setCompacting] = useState(false);
-
-  // ── Swarm state ──────────────────────────────────────
-  const [swarmMode, setSwarmMode] = useState(false);
-  const [swarmPhase, setSwarmPhase] = useState<
-    "idle" | "planning" | "reviewing" | "spawning"
-  >("idle");
-  const [swarmPlannerId, setSwarmPlannerId] = useState<string | null>(null);
-  const [swarmEpicId, setSwarmEpicId] = useState<number | null>(null);
-  const [swarmSubtasks, setSwarmSubtasks] = useState<
-    Array<{ title: string; description: string }>
-  >([]);
-  const [swarmOriginalTask, setSwarmOriginalTask] = useState("");
-  const [swarmError, setSwarmError] = useState<string | null>(null);
-
-  // Refs for swarm state so polling closure always reads latest values
-  const swarmPhaseRef = useRef(swarmPhase);
-  swarmPhaseRef.current = swarmPhase;
-  const swarmPlannerIdRef = useRef(swarmPlannerId);
-  swarmPlannerIdRef.current = swarmPlannerId;
-  const swarmEpicIdRef = useRef(swarmEpicId);
-  swarmEpicIdRef.current = swarmEpicId;
-
-  // Reset swarm state when panel closes or new session
-  useEffect(() => {
-    if (!open) {
-      setSwarmMode(false);
-      setSwarmPhase("idle");
-      setSwarmPlannerId(null);
-      setSwarmEpicId(null);
-      setSwarmSubtasks([]);
-      setSwarmOriginalTask("");
-      setSwarmError(null);
-    }
-  }, [open]);
 
   // Sync mounted/visible states with open — animate in/out
   useEffect(() => {
@@ -2101,89 +1949,12 @@ export default function SessionDetail({
     isDragging.current = false;
   }, []);
 
-  // ── Swarm spawn handler ────────────────────────────
-  const handleSwarmSpawn = useCallback(async () => {
-    if (!swarmEpicId || !newSessionDirectory || !boardId) return;
-    setSwarmPhase("spawning");
-    setSwarmError(null);
-    try {
-      const res = await fetch("/api/sessions/swarm/spawn", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          directory: newSessionDirectory,
-          board_id: boardId,
-          epic_id: swarmEpicId,
-          subtasks: swarmSubtasks,
-          original_task: swarmOriginalTask,
-        }),
-      });
-      if (!res.ok) {
-        const body = await res
-          .json()
-          .catch(() => ({ error: `HTTP ${res.status}` }));
-        throw new Error(body.error || "Failed to spawn sessions");
-      }
-      // Success — close panel and open swarm status
-      onEpicCreated?.(swarmEpicId);
-      onOpenChange(false);
-    } catch (err) {
-      setSwarmError(
-        err instanceof Error ? err.message : "Failed to spawn sessions",
-      );
-      setSwarmPhase("reviewing"); // Allow retry
-    }
-  }, [
-    swarmEpicId,
-    newSessionDirectory,
-    boardId,
-    swarmSubtasks,
-    swarmOriginalTask,
-    onEpicCreated,
-    onOpenChange,
-  ]);
-
   // Send message
   const sendMessage = useCallback(
     async (text: string) => {
       if (!text || sending) return;
       if (!sessionId && !newSessionDirectory) return;
       setSending(true);
-
-      // ── Swarm mode: start planning instead of normal send ──
-      if (swarmMode && !sessionId && newSessionDirectory && boardId) {
-        try {
-          const res = await fetch("/api/sessions/swarm", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              directory: newSessionDirectory,
-              board_id: boardId,
-              task: text,
-            }),
-          });
-          if (!res.ok) {
-            const body = await res
-              .json()
-              .catch(() => ({ error: `HTTP ${res.status}` }));
-            throw new Error(body.error || "Failed to start swarm");
-          }
-          const data = await res.json();
-          setSwarmPlannerId(data.planner_session_id);
-          setSwarmEpicId(data.epic_id);
-          setSwarmOriginalTask(text);
-          setSwarmPhase("planning");
-          // Switch to the planner session so we can see its messages
-          if (onSessionCreated && data.planner_session_id) {
-            onSessionCreated(data.planner_session_id);
-          }
-          setSending(false);
-          return;
-        } catch (err) {
-          setSending(false);
-          throw err;
-        }
-      }
 
       try {
         let sid = sessionId;
@@ -2804,22 +2575,6 @@ export default function SessionDetail({
           }
         }
 
-        // ── Swarm plan detection via epic API ──────
-        if (swarmPhaseRef.current === "planning" && swarmEpicIdRef.current) {
-          try {
-            const epicRes = await fetch(`/api/epics/${swarmEpicIdRef.current}`);
-            if (epicRes.ok) {
-              const epicData = await epicRes.json();
-              if (epicData.status === "ready" && epicData.plan_subtasks) {
-                setSwarmSubtasks(epicData.plan_subtasks);
-                setSwarmPhase("reviewing");
-              }
-            }
-          } catch {
-            // Will retry on next poll
-          }
-        }
-
         // Also refresh todos
         const todoRes = await fetch(
           `/api/opencode/session/${activeSessionId}/todo`,
@@ -3167,90 +2922,6 @@ export default function SessionDetail({
           )}
         </div>
 
-        {/* ── Swarm Review Panel ──────────────────── */}
-        {swarmPhase === "reviewing" && swarmSubtasks.length > 0 && (
-          <div className="border-t flex-shrink-0 bg-amber-500/5 border-amber-500/20">
-            <div className="px-4 py-3 space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-semibold">
-                  Swarm Plan — {swarmSubtasks.length} subtasks
-                </h3>
-                <Badge
-                  variant="secondary"
-                  className="text-[10px] bg-amber-500/15 text-amber-600 border-0"
-                >
-                  🐝 Swarm
-                </Badge>
-              </div>
-              <div className="space-y-2 max-h-60 overflow-y-auto">
-                {swarmSubtasks.map((subtask, i) => (
-                  <div key={i} className="flex gap-2 text-xs">
-                    <span className="font-mono font-bold text-amber-600 shrink-0 w-5">
-                      {i + 1}.
-                    </span>
-                    <div className="min-w-0">
-                      <p className="font-medium">{subtask.title}</p>
-                      <p className="text-muted-foreground line-clamp-2">
-                        {subtask.description}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              {swarmError && (
-                <p className="text-xs text-destructive">{swarmError}</p>
-              )}
-              <div className="flex items-center gap-2 pt-1">
-                <Button
-                  size="sm"
-                  className="bg-amber-500 hover:bg-amber-600 text-white text-xs"
-                  onClick={handleSwarmSpawn}
-                >
-                  🐝 Spawn {swarmSubtasks.length} Sessions
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-xs text-muted-foreground"
-                  onClick={() => {
-                    setSwarmPhase("idle");
-                    setSwarmSubtasks([]);
-                    setSwarmError(null);
-                  }}
-                >
-                  Cancel
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Swarm planning/spawning indicator */}
-        {(swarmPhase === "planning" || swarmPhase === "spawning") && (
-          <div className="border-t flex-shrink-0 bg-purple-500/5 border-purple-500/20 px-4 py-3 flex items-center gap-2">
-            <Loader2 className="w-4 h-4 animate-spin text-purple-500" />
-            <span className="text-xs text-purple-600">
-              {swarmPhase === "planning"
-                ? "Planning task decomposition…"
-                : "Creating sessions…"}
-            </span>
-            {swarmPhase === "planning" && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-xs text-muted-foreground ml-auto"
-                onClick={() => {
-                  setSwarmPhase("idle");
-                  setSwarmMode(false);
-                  setSwarmError(null);
-                }}
-              >
-                Cancel
-              </Button>
-            )}
-          </div>
-        )}
-
         {/* Todos + Message Input */}
         <div className="border-t flex-shrink-0">
           {/* Todos */}
@@ -3272,9 +2943,6 @@ export default function SessionDetail({
               onClose={() => onOpenChange(false)}
               data={data}
               directory={data?.directory ?? null}
-              isSwarmAvailable={isNewSession && !!boardId}
-              swarmEnabled={swarmMode}
-              onSwarmToggle={setSwarmMode}
             />
           )}
         </div>

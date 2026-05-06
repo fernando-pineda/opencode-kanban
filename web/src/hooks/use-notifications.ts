@@ -15,7 +15,7 @@ export interface Notification {
   id: number
   board_id: number
   session_id: string
-  type: 'iteration_complete' | 'epic_complete' | 'task_failed' | 'subtask_complete'
+  type: 'iteration_complete' | 'task_failed' | 'subtask_complete'
   title: string
   seen: boolean
   created_at: string

@@ -31,20 +31,6 @@ Modern terminal emulators are GPU-accelerated applications. Ghostty uses **Metal
 
 As a developer, your browser is already open all day: docs, PRs, dashboards, CI logs, Linear tickets. opencode-kanban moves your agent conversations into **a browser tab** — no GPU overhead, no extra battery drain, no window management. One tab. One dashboard.
 
-### Real swarm orchestration
-
-Most AI coding tools are single-agent: you ask, it responds, one conversation at a time. Anthropic's [Building Effective Agents](https://www.anthropic.com/research/building-effective-agents) research identifies the **orchestrator-workers pattern** — where a central agent dynamically decomposes tasks and delegates them to parallel workers — as one of the most effective architectures for complex coding tasks.
-
-opencode-kanban makes this pattern first-class:
-
-1. You describe a task to the **planner** agent
-2. The planner breaks it into parallel subtasks
-3. Each subtask **spawns its own agent session** — its own conversation, its own git worktree, its own model
-4. Agents execute simultaneously, each working on a different part of your codebase
-5. The kanban board tracks every agent, every branch, every file change — **in real time**
-
-This isn't sequential hand-offs. This is true parallel execution with live observability.
-
 ### Visibility into the black box
 
 When an AI agent modifies your codebase, you need to know:
@@ -54,7 +40,7 @@ When an AI agent modifies your codebase, you need to know:
 - **What files did it change?** — Each card tracks its git branch and diffs
 - **Can I trust the result?** — Full agent logs, subtask tracking, and session history
 
-The terminal is great for quick edits. But when you're orchestrating 3–5 agents working in parallel across your codebase, you need a **dashboard** — not five terminal panes you can't keep track of.
+The terminal is great for quick edits. But when you're running multiple agent sessions across your codebase, you need a **dashboard** — not five terminal panes you can't keep track of.
 
 ## 🎯 What It Does
 

@@ -28,7 +28,6 @@ export interface Card {
     column_name: string;
     subtasks?: Subtask[];
     agent_logs?: AgentLog[];
-    epic_task_key?: string;
 }
 export interface Subtask {
     id: number;
@@ -88,7 +87,6 @@ export interface BoardFull {
     board: Board;
     columns: Column[];
     cards: Card[];
-    epics: Epic[];
 }
 export interface Rule {
     id: number;

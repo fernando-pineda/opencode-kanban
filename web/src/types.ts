@@ -34,7 +34,6 @@ export interface Card {
   // Populated by getBoardFull
   subtasks?: Subtask[];
   agent_logs?: AgentLog[];
-  epic_task_key?: string;
 }
 
 export interface Subtask {
@@ -72,49 +71,10 @@ export interface AgentLog {
   timestamp: string;
 }
 
-export interface Epic {
-  id: number;
-  board_id: number;
-  task_key: string;
-  title: string;
-  description: string;
-  plan_text: string;
-  status:
-    | "planning"
-    | "ready"
-    | "spawning"
-    | "running"
-    | "completed"
-    | "failed";
-  planner_session_id: string | null;
-  column_name: string;
-  created_at: string;
-  updated_at: string;
-  sessions?: EpicSession[];
-  plan_subtasks?: Array<{ title: string; description: string }>;
-}
-
-export interface EpicSession {
-  id: number;
-  epic_id: number;
-  session_id: string;
-  task_key: string;
-  subtask_index: number;
-  title: string;
-  description: string;
-  is_busy?: boolean;
-}
-
-export interface SwarmSubtask {
-  title: string;
-  description: string;
-}
-
 export interface BoardFull {
   board: Board;
   columns: Column[];
   cards: Card[];
-  epics: Epic[];
 }
 
 export interface TodoItem {
