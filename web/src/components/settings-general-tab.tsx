@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Loader2, RotateCcw, Shrink, ToggleLeft, ToggleRight, Brain, Bell, BellOff } from "lucide-react";
+import { Loader2, RotateCcw, Shrink, ToggleLeft, ToggleRight, Brain, Bell, BellOff, FileText, Save } from "lucide-react";
 import { toast } from "sonner";
 import { requestNotificationPermission, getNotificationPermissionStatus } from "@/lib/desktop-notifications";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,10 @@ export default function SettingsGeneralTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [reloading, setReloading] = useState(false);
+  const [agentsMdContent, setAgentsMdContent] = useState("");
+  const [agentsMdLoaded, setAgentsMdLoaded] = useState(false);
+  const [agentsMdDirty, setAgentsMdDirty] = useState(false);
+  const [agentsMdSaving, setAgentsMdSaving] = useState(false);
 
   // Fetch settings on mount
   useEffect(() => {
@@ -75,6 +79,23 @@ export default function SettingsGeneralTab() {
       }
     };
     fetchSettings();
+  }, []);
+
+  // Fetch AGENTS.md on mount
+  useEffect(() => {
+    const fetchAgentsMd = async () => {
+      try {
+        const res = await fetch("/api/agents/global-file");
+        if (res.ok) {
+          const data = await res.json();
+          setAgentsMdContent(data.content || "");
+          setAgentsMdLoaded(true);
+        }
+      } catch {
+        // non-critical
+      }
+    };
+    fetchAgentsMd();
   }, []);
 
   const saveSettings = useCallback(async (newSettings: GeneralSettingsData) => {
@@ -140,6 +161,24 @@ export default function SettingsGeneralTab() {
       setReloading(false);
     }
   }, []);
+
+  const handleSaveAgentsMd = useCallback(async () => {
+    setAgentsMdSaving(true);
+    try {
+      const res = await fetch("/api/agents/global-file", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: agentsMdContent }),
+      });
+      if (!res.ok) throw new Error(`Failed: ${res.status}`);
+      setAgentsMdDirty(false);
+      toast.success("Global AGENTS.md saved");
+    } catch {
+      toast.error("Failed to save AGENTS.md");
+    } finally {
+      setAgentsMdSaving(false);
+    }
+  }, [agentsMdContent]);
 
   if (loading) {
     return (
@@ -332,6 +371,43 @@ export default function SettingsGeneralTab() {
             </>
           )}
         </Button>
+      </div>
+
+      {/* Global AGENTS.md Card */}
+      <div className="rounded-lg border bg-card p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <FileText className="h-4 w-4 text-muted-foreground" />
+          <span className="text-sm font-semibold">Global Rules</span>
+          <span className="text-[10px] text-muted-foreground font-mono">AGENTS.md</span>
+        </div>
+
+        <p className="text-xs text-muted-foreground">
+          Global rules injected into every agent conversation. Edit the shared instructions that all agents receive.
+        </p>
+
+        <textarea
+          value={agentsMdContent}
+          onChange={(e) => { setAgentsMdContent(e.target.value); setAgentsMdDirty(true); }}
+          className="w-full min-h-[200px] max-h-[400px] text-xs font-mono bg-muted rounded-md p-3 border resize-y focus:ring-1 focus:ring-ring outline-none"
+          spellCheck={false}
+          placeholder="# Global agent rules..."
+        />
+
+        <div className="flex items-center justify-between">
+          {agentsMdDirty && (
+            <span className="text-xs text-muted-foreground">Unsaved changes</span>
+          )}
+          <div className="ml-auto">
+            <Button size="sm" disabled={!agentsMdDirty || agentsMdSaving} onClick={handleSaveAgentsMd}>
+              {agentsMdSaving ? (
+                <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+              ) : (
+                <Save className="h-3 w-3 mr-1.5" />
+              )}
+              Save
+            </Button>
+          </div>
+        </div>
       </div>
 
       {/* Desktop Notifications Card */}

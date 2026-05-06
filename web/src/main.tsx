@@ -86,6 +86,7 @@ function App() {
             {activeBoard ? (
               <KanbanBoard
                 board={activeBoard}
+                boardId={activeBoard.board.id}
                 onCardClick={(id) => {
                   setSelectedSession(id);
                   setNewSessionDir(null);

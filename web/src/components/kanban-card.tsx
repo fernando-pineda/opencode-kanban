@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Card as CardType } from "../types";
+import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
   Loader2,
   CheckCircle2,
@@ -73,7 +74,9 @@ function todoStatusIcon(status: string) {
     case "completed":
       return <CheckCircle2 className="w-3 h-3 text-green-500 shrink-0" />;
     case "in_progress":
-      return <Loader2 className="w-3 h-3 text-blue-500 animate-spin shrink-0" />;
+      return (
+        <Loader2 className="w-3 h-3 text-blue-500 animate-spin shrink-0" />
+      );
     default:
       return <Circle className="w-3 h-3 text-muted-foreground/40 shrink-0" />;
   }
@@ -86,15 +89,43 @@ function priorityDot(priority: string) {
       : priority === "medium"
         ? "text-yellow-500"
         : "text-muted-foreground";
-  const symbol =
-    priority === "high" ? "●" : priority === "medium" ? "◑" : "○";
+  const symbol = priority === "high" ? "●" : priority === "medium" ? "◑" : "○";
   return <span className={`text-[10px] shrink-0 ${color}`}>{symbol}</span>;
 }
 
-export default function KanbanCard({ card, onClick, hasUnseenNotification }: KanbanCardProps) {
+export default function KanbanCard({
+  card,
+  onClick,
+  hasUnseenNotification,
+}: KanbanCardProps) {
   const columnName = card.column_name || "";
   const subtasks = card.subtasks || [];
   const [todos, setTodos] = useState<TodoItem[]>([]);
+
+  const {
+    attributes,
+    listeners,
+    setNodeRef: setDraggableRef,
+    isDragging,
+  } = useDraggable({
+    id: card.session_id,
+  });
+
+  const { setNodeRef: setDroppableRef } = useDroppable({
+    id: card.session_id,
+  });
+
+  const combinedRef = useCallback(
+    (node: HTMLElement | null) => {
+      setDraggableRef(node);
+      setDroppableRef(node);
+    },
+    [setDraggableRef, setDroppableRef],
+  );
+
+  const style: React.CSSProperties = {
+    opacity: isDragging ? 0.3 : 1,
+  };
 
   // Fetch todos from opencode API — poll to stay in sync with agent updates
   useEffect(() => {
@@ -129,8 +160,12 @@ export default function KanbanCard({ card, onClick, hasUnseenNotification }: Kan
 
   return (
     <div
-      className="relative rounded-lg border bg-card p-3 hover:bg-accent/50 transition-colors cursor-pointer"
+      ref={combinedRef}
+      style={style}
+      className="relative rounded-lg border bg-card p-3 hover:bg-accent/50 transition-colors cursor-grab active:cursor-grabbing select-none"
       onClick={onClick}
+      {...attributes}
+      {...listeners}
     >
       {hasUnseenNotification && !card.is_busy && (
         <div className="absolute top-3 right-3 w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_6px_rgba(239,68,68,0.5)]" />
@@ -146,7 +181,9 @@ export default function KanbanCard({ card, onClick, hasUnseenNotification }: Kan
           />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
-              <div className="text-sm font-medium line-clamp-2">{card.title}</div>
+              <div className="text-sm font-medium line-clamp-2">
+                {card.title}
+              </div>
             </div>
 
             {/* Full TODO list */}

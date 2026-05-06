@@ -199,25 +199,18 @@ function determineSessionColumn(
   // 3. Archived sessions
   if (isArchived) return "Archived";
 
-  // 4. Agent-based assignment
+  // 4. BUILD agent → auto-promote to "In Progress" and persist
   const agent = getSessionLatestAgent(sessionId);
   if (agent) {
     const agentLower = agent.toLowerCase();
-    // Planning/research agents → Backlog
-    if (
-      agentLower.includes("plan") ||
-      agentLower.includes("ask") ||
-      agentLower.includes("research")
-    ) {
-      return "Backlog";
-    }
-    // Build/code agents → In Progress
     if (agentLower.includes("build") || agentLower.includes("code")) {
+      // Persist so it doesn't revert when agent changes
+      setSessionExplicitColumn(sessionId, "In Progress");
       return "In Progress";
     }
   }
 
-  // 5. Default: Backlog (new sessions, PLAN agent, etc.)
+  // 5. Default: Backlog (new sessions)
   return "Backlog";
 }
 

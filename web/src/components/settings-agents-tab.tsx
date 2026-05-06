@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
-import { Bot, Cpu, Save, Loader2, Trash2 } from "lucide-react";
+import { Bot, Cpu, Save, Loader2, Trash2, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,14 @@ export interface AgentInfo {
   native: boolean;
   model: { providerID: string; modelID: string } | null;
 }
+
+export interface ModelInfo {
+  providerID: string;
+  modelID: string;
+  name: string;
+}
+
+// ── Agent Card ───────────────────────────────────────────────
 
 interface AgentCardProps {
   agent: AgentInfo;
@@ -148,6 +156,211 @@ function AgentCard({ agent, content, fileExists, isDirty, isSaving, canDelete, i
   );
 }
 
+// ── Model Selector ───────────────────────────────────────────
+
+function ModelSelector({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [filter, setFilter] = useState("");
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    fetch("/api/models").then(r => r.json()).then(setModels).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const filtered = models.filter(m =>
+    m.name.toLowerCase().includes(filter.toLowerCase()) ||
+    m.modelID.toLowerCase().includes(filter.toLowerCase()) ||
+    m.providerID.toLowerCase().includes(filter.toLowerCase())
+  );
+
+  // Group by provider
+  const grouped = filtered.reduce((acc, m) => {
+    const key = m.providerID;
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(m);
+    return acc;
+  }, {} as Record<string, ModelInfo[]>);
+
+  return (
+    <div className="relative" ref={ref}>
+      <input
+        type="text"
+        className="w-full text-xs bg-muted rounded-md px-3 py-2 border focus:ring-1 focus:ring-ring outline-none"
+        placeholder="Search models..."
+        value={open ? filter : (value || "")}
+        onChange={(e) => { setFilter(e.target.value); setOpen(true); }}
+        onFocus={() => { setOpen(true); setFilter(value || ""); }}
+      />
+      {open && (
+        <div className="absolute z-50 w-full mt-1 bg-popover border rounded-md shadow-lg max-h-48 overflow-y-auto">
+          {value && (
+            <button
+              className="w-full text-left text-xs px-3 py-1.5 hover:bg-accent text-muted-foreground"
+              onClick={() => { onChange(""); setOpen(false); }}
+            >
+              Clear selection
+            </button>
+          )}
+          {Object.entries(grouped).map(([provider, pModels]) => (
+            <div key={provider}>
+              <div className="text-[10px] font-semibold text-muted-foreground px-3 py-1 bg-muted/50">{provider}</div>
+              {pModels.map(m => (
+                <button
+                  key={`${m.providerID}/${m.modelID}`}
+                  className="w-full text-left text-xs px-3 py-1.5 hover:bg-accent truncate"
+                  onClick={() => { onChange(`${m.providerID}/${m.modelID}`); setOpen(false); }}
+                >
+                  {m.name}
+                </button>
+              ))}
+            </div>
+          ))}
+          {filtered.length === 0 && (
+            <div className="text-xs text-muted-foreground px-3 py-2">No models found</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Create Agent Form ────────────────────────────────────────
+
+export interface CreateAgentInfo {
+  name: string;
+  mode: "primary" | "subagent";
+  description?: string;
+  model?: string;
+}
+
+interface CreateAgentFormProps {
+  mode: "primary" | "subagent";
+  onCreated: (info: CreateAgentInfo) => void;
+}
+
+function CreateAgentForm({ mode, onCreated }: CreateAgentFormProps) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [model, setModel] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleCreate = async () => {
+    if (!name.trim()) { setError("Name is required"); return; }
+    if (!/^[a-zA-Z0-9_-]+$/.test(name.trim())) { setError("Name can only contain letters, numbers, hyphens, and underscores"); return; }
+
+    setCreating(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/agents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim(),
+          mode,
+          description: description.trim() || undefined,
+          model: model || undefined,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || `Failed: ${res.status}`);
+      }
+      toast.success(`Agent "${name.trim()}" created`);
+      onCreated({
+        name: name.trim(),
+        mode,
+        description: description.trim() || undefined,
+        model: model || undefined,
+      });
+      // Reset form
+      setName("");
+      setDescription("");
+      setModel("");
+      setOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create agent");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <button
+        className="w-full flex items-center justify-center gap-1.5 text-xs text-muted-foreground hover:text-foreground py-2 rounded-md border border-dashed hover:border-solid transition-colors"
+        onClick={() => setOpen(true)}
+      >
+        <Plus className="h-3.5 w-3.5" />
+        Add {mode === "primary" ? "Agent" : "Subagent"}
+      </button>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border bg-card p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <h4 className="text-sm font-semibold">New {mode === "primary" ? "Agent" : "Subagent"}</h4>
+        <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => { setOpen(false); setError(null); }}>
+          <X className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+
+      <div className="space-y-2">
+        <div>
+          <label className="text-xs text-muted-foreground">Name</label>
+          <input
+            type="text"
+            className="w-full text-xs bg-muted rounded-md px-3 py-2 border focus:ring-1 focus:ring-ring outline-none"
+            placeholder="my-agent"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            autoFocus
+          />
+        </div>
+        <div>
+          <label className="text-xs text-muted-foreground">Description</label>
+          <input
+            type="text"
+            className="w-full text-xs bg-muted rounded-md px-3 py-2 border focus:ring-1 focus:ring-ring outline-none"
+            placeholder="What this agent does..."
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+        </div>
+        <div>
+          <label className="text-xs text-muted-foreground">Model</label>
+          <ModelSelector value={model} onChange={setModel} />
+        </div>
+      </div>
+
+      {error && <p className="text-xs text-destructive">{error}</p>}
+
+      <div className="flex justify-end gap-2">
+        <Button variant="outline" size="sm" onClick={() => { setOpen(false); setError(null); }}>
+          Cancel
+        </Button>
+        <Button size="sm" disabled={creating || !name.trim()} onClick={handleCreate}>
+          {creating ? <Loader2 className="h-3 w-3 mr-1.5 animate-spin" /> : <Plus className="h-3 w-3 mr-1.5" />}
+          Create
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ── Agents List ──────────────────────────────────────────────
+
 interface AgentsListProps {
   agents: AgentInfo[];
   agentFiles: Record<string, string>;
@@ -155,22 +368,28 @@ interface AgentsListProps {
   dirtyFiles: Set<string>;
   saving: Record<string, boolean>;
   deleting: Record<string, boolean>;
+  mode: "primary" | "subagent";
   onContentChange: (name: string, content: string) => void;
   onSave: (name: string) => void;
   onDelete: (name: string) => void;
+  onAgentCreated: (info: CreateAgentInfo) => void;
 }
 
-export function AgentsList({ agents, agentFiles, agentFileExists, dirtyFiles, saving, deleting, onContentChange, onSave, onDelete }: AgentsListProps) {
+export function AgentsList({ agents, agentFiles, agentFileExists, dirtyFiles, saving, deleting, mode, onContentChange, onSave, onDelete, onAgentCreated }: AgentsListProps) {
   if (agents.length === 0) {
     return (
-      <div className="text-sm text-muted-foreground text-center py-8">
-        No agents found.
+      <div className="space-y-3">
+        <CreateAgentForm mode={mode} onCreated={onAgentCreated} />
+        <div className="text-sm text-muted-foreground text-center py-8">
+          No {mode === "primary" ? "agents" : "subagents"} found. Create one!
+        </div>
       </div>
     );
   }
 
   return (
     <div className="space-y-3">
+      <CreateAgentForm mode={mode} onCreated={onAgentCreated} />
       {agents.map((agent) => (
         <AgentCard
           key={agent.name}
@@ -209,21 +428,51 @@ export function useAgentsData() {
       try {
         setLoading(true);
         setError(null);
-        const [agentRes, hiddenRes] = await Promise.all([
+        const [agentRes, hiddenRes, diskRes] = await Promise.all([
           fetch("/api/opencode/agent"),
           fetch("/api/agents/hidden"),
+          fetch("/api/agents"),
         ]);
         if (!agentRes.ok) throw new Error(`Failed to fetch agents: ${agentRes.status}`);
-        const data = await agentRes.json();
+        const opencodeAgents: AgentInfo[] = await agentRes.json();
         const hiddenData = hiddenRes.ok ? await hiddenRes.json() : { hidden: [] };
         const hidden = (hiddenData.hidden || []) as string[];
         setHiddenAgents(hidden);
-        setAgents(data || []);
+
+        // Merge: opencode agents are the base, then add disk-only agents
+        // that opencode hasn't loaded yet (e.g. just-created .md files)
+        const opencodeNames = new Set(opencodeAgents.map((a) => a.name));
+        let merged = [...opencodeAgents];
+
+        if (diskRes.ok) {
+          const diskAgents = await diskRes.json() as Array<{
+            name: string;
+            mode: string;
+            description: string;
+            model: string | null;
+          }>;
+          for (const da of diskAgents) {
+            if (!opencodeNames.has(da.name)) {
+              const modelParts = da.model ? da.model.split("/") : null;
+              merged.push({
+                name: da.name,
+                mode: da.mode,
+                description: da.description,
+                hidden: false,
+                native: false,
+                model: modelParts && modelParts.length === 2
+                  ? { providerID: modelParts[0], modelID: modelParts[1] }
+                  : null,
+              });
+            }
+          }
+        }
+
+        setAgents(merged);
 
         // Fetch file content for each visible agent in parallel
-        const entries = (data || [])
-          .filter((a: AgentInfo) => a.hidden !== true && !hidden.includes(a.name))
-          .map(async (agent: AgentInfo) => {
+        const visible = merged.filter((a: AgentInfo) => a.hidden !== true && !hidden.includes(a.name));
+        const entries = visible.map(async (agent: AgentInfo) => {
             try {
               const fileRes = await fetch(`/api/agents/${agent.name}/file`);
               if (fileRes.ok) {
@@ -317,6 +566,39 @@ export function useAgentsData() {
     }
   }, []);
 
+  const handleAgentCreated = useCallback(async (info: CreateAgentInfo) => {
+    // Optimistically add the new agent to local state.
+    // Opencode caches agents in memory and won't pick up new .md files
+    // until restarted, so we can't rely on /api/opencode/agent here.
+    const modelParts = info.model ? info.model.split("/") : null;
+    const newAgent: AgentInfo = {
+      name: info.name,
+      mode: info.mode,
+      description: info.description || info.name,
+      hidden: false,
+      native: false,
+      model: modelParts && modelParts.length === 2
+        ? { providerID: modelParts[0], modelID: modelParts[1] }
+        : null,
+    };
+    setAgents(prev => {
+      if (prev.some(a => a.name === info.name)) return prev;
+      return [...prev, newAgent];
+    });
+
+    // Fetch the new agent's file content for the editor
+    try {
+      const fileRes = await fetch(`/api/agents/${info.name}/file`);
+      if (fileRes.ok) {
+        const fileData = await fileRes.json();
+        setAgentFiles(prev => ({ ...prev, [info.name]: fileData.content || "" }));
+        setAgentFileExists(prev => ({ ...prev, [info.name]: fileData.exists !== false }));
+      }
+    } catch {
+      // non-critical
+    }
+  }, []);
+
   const visibleAgents = agents.filter((a) => a.hidden !== true && !hiddenAgents.includes(a.name));
   const primaryAgents = visibleAgents.filter((a) => a.mode === "primary");
   const subagents = visibleAgents.filter((a) => a.mode === "subagent");
@@ -334,6 +616,7 @@ export function useAgentsData() {
     handleContentChange,
     handleSave,
     handleDelete,
+    handleAgentCreated,
   };
 }
 

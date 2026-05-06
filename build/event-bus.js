@@ -12,6 +12,8 @@ export const EVENT_TYPES = {
     SESSION_STARTED: 'session_started',
     SESSION_ENDED: 'session_ended',
     OPENCODE_SESSION_STATUS: 'opencode_session_status',
+    OPENCODE_MESSAGE_PART_UPDATED: 'opencode_message_part_updated',
+    OPENCODE_MESSAGE_UPDATED: 'opencode_message_updated',
     EPIC_UPDATED: 'epic_updated',
     NOTIFICATION_CREATED: 'notification_created',
     NOTIFICATION_SEEN: 'notification_seen',

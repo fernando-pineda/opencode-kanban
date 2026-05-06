@@ -1027,31 +1027,16 @@ const MessageRow = memo(function MessageRow({
 
       {/* Thinking */}
       {(msg.reasoning || (isBusy && isLastAssistant)) && (
-        <Collapsible defaultOpen>
+        <Collapsible>
           <CollapsibleTrigger asChild>
             <button className="flex items-center gap-1.5 text-xs text-muted-foreground/70 hover:text-muted-foreground transition-colors py-0.5">
               <ChevronDown className="w-3 h-3" />
-              {isBusy && isLastAssistant ? (
-                <span className="flex items-center gap-1">
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                  <span>Thinking</span>
-                  <span className="inline-flex gap-0.5">
-                    <span className="animate-[bounce_1s_ease-in-out_infinite]">.</span>
-                    <span className="animate-[bounce_1s_ease-in-out_0.15s_infinite]">.</span>
-                    <span className="animate-[bounce_1s_ease-in-out_0.3s_infinite]">.</span>
-                  </span>
-                </span>
-              ) : (
-                <span>Thinking…</span>
-              )}
+              <span>Show thinking</span>
             </button>
           </CollapsibleTrigger>
           <CollapsibleContent>
             <div className="text-xs text-muted-foreground/60 italic pl-4 py-1 border-l-2 border-muted whitespace-pre-wrap">
               {msg.reasoning || ""}
-              {isBusy && isLastAssistant && msg.reasoning && (
-                <span className="inline-block w-1.5 h-3 bg-muted-foreground/40 animate-pulse ml-0.5 align-text-bottom" />
-              )}
             </div>
           </CollapsibleContent>
         </Collapsible>
@@ -2313,24 +2298,55 @@ export default function SessionDetail({
     fetchStatuses,
   ]);
 
-  // Fetch agents
+  // Fetch agents (merge opencode in-memory + disk-only agents)
   useEffect(() => {
-    fetch("/api/opencode/agent")
-      .then((r) => r.json())
+    Promise.all([
+      fetch("/api/opencode/agent").then((r) => r.json()),
+      fetch("/api/agents").then((r) => (r.ok ? r.json() : [])),
+    ])
       .then(
-        (
-          list: {
+        ([
+          opencodeList,
+          diskList,
+        ]) => {
+          // opencode agents (in-memory, may have richer metadata)
+          const ocAgents = (opencodeList || []) as {
             name: string;
             description?: string;
             mode?: string;
             hidden?: boolean;
             model?: { providerID: string; modelID: string };
-          }[],
-        ) => {
-          // Match opencode CLI: exclude subagent + hidden agents
-          const visible = list.filter(
+          }[];
+
+          // Disk-only agents (created after opencode started)
+          const diskAgents = (diskList || []) as {
+            name: string;
+            mode: string;
+            description: string;
+            model: string | null;
+          }[];
+
+          // Merge: start with opencode primaries, add disk-only primaries
+          const visible = ocAgents.filter(
             (a) => a.mode !== "subagent" && !a.hidden,
           );
+          const knownNames = new Set(visible.map((a) => a.name));
+
+          for (const da of diskAgents) {
+            if (da.mode === "primary" && !knownNames.has(da.name)) {
+              const modelParts = da.model ? da.model.split("/") : null;
+              visible.push({
+                name: da.name,
+                description: da.description,
+                mode: da.mode,
+                model:
+                  modelParts && modelParts.length === 2
+                    ? { providerID: modelParts[0], modelID: modelParts[1] }
+                    : undefined,
+              });
+            }
+          }
+
           setAgents(visible);
           if (visible.length > 0) {
             // Restore persisted agent selection
@@ -2343,8 +2359,9 @@ export default function SessionDetail({
         },
       )
       .catch(() => {});
+    // Re-fetch agents whenever the sheet opens so deletions/creations are reflected
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [open]);
 
   // Restore agent selection when switching sessions
   useEffect(() => {
@@ -2613,17 +2630,18 @@ export default function SessionDetail({
       }
     };
 
-    // Determine interval based on session status: 500ms when busy, 2000ms when idle
-    // Use ref to avoid stale closure issues with isBusy
-    const pollInterval = isBusyRef.current ? 500 : 2000;
+    // Reduced polling — SSE handles real-time streaming; this is a safety net
+    const pollInterval = isBusyRef.current ? 3000 : 10000;
 
     const interval = setInterval(poll, pollInterval);
 
-    // SSE for immediate triggers — also parse opencode session status events directly
+    // SSE for real-time streaming updates + session status
     const es = new EventSource("/api/events");
     es.onmessage = (event) => {
       try {
         const eventData = JSON.parse(event.data);
+        const activeId = activeChildId || sessionId;
+
         if (
           eventData.type === "opencode_session_status" &&
           eventData.sessionID
@@ -2633,7 +2651,6 @@ export default function SessionDetail({
             ...prev,
             [eventData.sessionID]: eventData.status,
           }));
-          const activeId = activeChildId || sessionId;
           if (
             eventData.sessionID === activeId &&
             eventData.status?.type !== "busy" &&
@@ -2641,9 +2658,101 @@ export default function SessionDetail({
           ) {
             waitingForResponseRef.current = false;
           }
+          // Status change may mean new messages appeared
+          poll();
+          return;
+        }
+
+        // Handle streaming message part updates (text chunks, tool progress)
+        if (
+          eventData.type === "opencode_message_part_updated" &&
+          eventData.sessionID === activeId &&
+          eventData.part
+        ) {
+          const part = eventData.part;
+          setData((prev) => {
+            if (!prev) return prev;
+            const messages = [...prev.messages];
+            if (messages.length === 0) return prev;
+
+            const lastMsg = messages[messages.length - 1];
+
+            // If last message is a user message, AI response hasn't been saved yet — create placeholder
+            if (lastMsg.role === "user") {
+              const newMsg: Message = {
+                id: "streaming-" + Date.now(),
+                role: "assistant",
+                model: null,
+                agent: null,
+                time_created: Date.now() / 1000,
+                text: part.type === "text" ? (part.text || "") : "",
+                reasoning: "",
+                tool_calls:
+                  part.type === "tool"
+                    ? [
+                        {
+                          tool: part.tool || "unknown",
+                          callID: part.callID || "",
+                          status:
+                            (part.state?.status as ToolCall["status"]) ||
+                            "running",
+                          input: part.state?.input || {},
+                          output: part.state?.metadata?.output || "",
+                        },
+                      ]
+                    : [],
+              };
+              messages.push(newMsg);
+            } else {
+              // Update existing assistant message in-place
+              const updated = { ...lastMsg };
+              if (part.type === "text" && part.text !== undefined) {
+                updated.text = part.text;
+              } else if (part.type === "tool" && part.callID) {
+                const toolCalls = [...(updated.tool_calls || [])];
+                const idx = toolCalls.findIndex(
+                  (tc) => tc.callID === part.callID,
+                );
+                const newTc: ToolCall = {
+                  tool:
+                    part.tool || (idx >= 0 ? toolCalls[idx].tool : "unknown"),
+                  callID: part.callID,
+                  status:
+                    (part.state?.status as ToolCall["status"]) ||
+                    (idx >= 0 ? toolCalls[idx].status : "running"),
+                  input:
+                    part.state?.input ||
+                    (idx >= 0 ? toolCalls[idx].input : {}),
+                  output:
+                    part.state?.metadata?.output ||
+                    (idx >= 0 ? toolCalls[idx].output : ""),
+                };
+                if (idx >= 0) {
+                  toolCalls[idx] = newTc;
+                } else {
+                  toolCalls.push(newTc);
+                }
+                updated.tool_calls = toolCalls;
+              }
+              messages[messages.length - 1] = updated;
+            }
+
+            return { ...prev, messages };
+          });
+          // Don't poll during streaming — SSE is the source of truth
+          return;
+        }
+
+        // Handle message completion — do a full sync
+        if (
+          eventData.type === "opencode_message_updated" &&
+          eventData.sessionID === activeId
+        ) {
+          poll();
+          return;
         }
       } catch {}
-      poll();
+      // Only poll for unrecognized events as safety fallback
     };
 
     return () => {

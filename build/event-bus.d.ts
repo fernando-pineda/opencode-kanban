@@ -11,6 +11,8 @@ export declare const EVENT_TYPES: {
     readonly SESSION_STARTED: "session_started";
     readonly SESSION_ENDED: "session_ended";
     readonly OPENCODE_SESSION_STATUS: "opencode_session_status";
+    readonly OPENCODE_MESSAGE_PART_UPDATED: "opencode_message_part_updated";
+    readonly OPENCODE_MESSAGE_UPDATED: "opencode_message_updated";
     readonly EPIC_UPDATED: "epic_updated";
     readonly NOTIFICATION_CREATED: "notification_created";
     readonly NOTIFICATION_SEEN: "notification_seen";
@@ -62,6 +64,14 @@ export interface KanbanEventPayloads {
         status: {
             type: string;
         };
+    };
+    opencode_message_part_updated: {
+        sessionID: string;
+        part: any;
+    };
+    opencode_message_updated: {
+        sessionID: string;
+        info: any;
     };
     epic_updated: {
         epic_id: number;

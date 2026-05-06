@@ -37,6 +37,7 @@ export default function SettingsDialog({ open, onOpenChange }: SettingsDialogPro
     handleContentChange,
     handleSave,
     handleDelete,
+    handleAgentCreated,
   } = useAgentsData();
 
   const content = loading ? (
@@ -79,9 +80,11 @@ export default function SettingsDialog({ open, onOpenChange }: SettingsDialogPro
                 dirtyFiles={dirtyFiles}
                 saving={saving}
                 deleting={deleting}
+                mode="primary"
                 onContentChange={handleContentChange}
                 onSave={handleSave}
                 onDelete={handleDelete}
+                onAgentCreated={handleAgentCreated}
               />
             )}
           </TabsContent>
@@ -94,9 +97,11 @@ export default function SettingsDialog({ open, onOpenChange }: SettingsDialogPro
                 dirtyFiles={dirtyFiles}
                 saving={saving}
                 deleting={deleting}
+                mode="subagent"
                 onContentChange={handleContentChange}
                 onSave={handleSave}
                 onDelete={handleDelete}
+                onAgentCreated={handleAgentCreated}
               />
             )}
           </TabsContent>

@@ -138,6 +138,96 @@ const app = express();
 app.use(express.json());
 // ── Proxy to opencode embedded server ─────────────────────
 app.all("/api/opencode/*", proxyToOpencode);
+// ── Opencode serve restart (for agent reload) ───────────────
+/** Restart opencode serve so it picks up new/modified agent files.
+ *  Opencode caches agents in memory at startup with no reload API.
+ *  This finds the running opencode serve process, kills it gracefully,
+ *  and restarts it with the same arguments. The kanban SSE subscription
+ *  auto-reconnects after 3-5 seconds.
+ */
+async function restartOpencodeServe() {
+    return new Promise((resolve) => {
+        // Find the opencode serve PID
+        exec("pgrep -f 'opencode serve'", (err, stdout) => {
+            if (err || !stdout.trim()) {
+                resolve({ restarted: false, error: "opencode serve not running" });
+                return;
+            }
+            const pid = parseInt(stdout.trim().split("\n")[0], 10);
+            if (isNaN(pid)) {
+                resolve({ restarted: false, error: "Could not determine opencode PID" });
+                return;
+            }
+            // Get the process's working directory
+            exec(`lsof -p ${pid} -Fn 2>/dev/null | grep '^n/' | head -1 | cut -c2-`, (cwdErr, cwdOut) => {
+                const cwd = cwdOut?.trim() || os.homedir();
+                // Send SIGTERM to opencode serve
+                try {
+                    process.kill(pid, "SIGTERM");
+                }
+                catch {
+                    resolve({ restarted: false, error: `Failed to kill PID ${pid}` });
+                    return;
+                }
+                // Wait for the process to die (port 4096 to free), then restart
+                let attempts = 0;
+                const maxAttempts = 30; // 15 seconds max
+                const checkAndRestart = () => {
+                    attempts++;
+                    try {
+                        process.kill(pid, 0); // throws if process is dead
+                        if (attempts < maxAttempts) {
+                            setTimeout(checkAndRestart, 500);
+                            return;
+                        }
+                        resolve({ restarted: false, error: "Timeout waiting for opencode to stop" });
+                        return;
+                    }
+                    catch {
+                        // Process is dead, restart it
+                    }
+                    // Restart opencode serve in the background
+                    const child = exec("nohup opencode serve > /dev/null 2>&1 &", { cwd }, (restartErr) => {
+                        if (restartErr) {
+                            resolve({ restarted: false, error: `Restart failed: ${restartErr.message}` });
+                            return;
+                        }
+                    });
+                    // Wait for port 4096 to be listening again
+                    let readyAttempts = 0;
+                    const maxReadyAttempts = 30;
+                    const checkReady = () => {
+                        readyAttempts++;
+                        fetch(`${OPENCODE_SERVER}/provider`)
+                            .then((r) => {
+                            if (r.ok) {
+                                resolve({ restarted: true });
+                            }
+                            else if (readyAttempts < maxReadyAttempts) {
+                                setTimeout(checkReady, 500);
+                            }
+                            else {
+                                resolve({ restarted: false, error: "opencode did not become ready in time" });
+                            }
+                        })
+                            .catch(() => {
+                            if (readyAttempts < maxReadyAttempts) {
+                                setTimeout(checkReady, 500);
+                            }
+                            else {
+                                resolve({ restarted: false, error: "opencode did not become ready in time" });
+                            }
+                        });
+                    };
+                    setTimeout(checkReady, 1000);
+                    // Avoid unhandled rejection from the child process
+                    child.unref();
+                };
+                setTimeout(checkAndRestart, 500);
+            });
+        });
+    });
+}
 // ── Agent File Management ────────────────────────────────
 // GET /api/agents/:name/file - Read agent markdown file
 app.get("/api/agents/:name/file", (req, res) => {
@@ -184,6 +274,12 @@ app.put("/api/agents/:name/file", (req, res) => {
         const filePath = path.join(os.homedir(), ".config/opencode/agents", `${name}.md`);
         try {
             fs.writeFileSync(filePath, content, "utf-8");
+            // Restart opencode serve to pick up the modified agent file
+            restartOpencodeServe().then(({ restarted, error }) => {
+                if (!restarted && error !== "opencode serve not running") {
+                    console.warn(`[agents] opencode restart after save failed: ${error}`);
+                }
+            });
             res.json({ success: true, name });
         }
         catch (err) {
@@ -198,6 +294,43 @@ app.put("/api/agents/:name/file", (req, res) => {
 app.get("/api/agents/hidden", (_req, res) => {
     try {
         res.json({ hidden: getHiddenAgents() });
+    }
+    catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+// GET /api/agents/global-file - Read global AGENTS.md file
+app.get("/api/agents/global-file", (_req, res) => {
+    try {
+        const filePath = path.join(os.homedir(), ".config/opencode/AGENTS.md");
+        try {
+            const content = fs.readFileSync(filePath, "utf-8");
+            res.json({ content, path: filePath, exists: true });
+        }
+        catch (err) {
+            if (err.code === "ENOENT") {
+                res.json({ content: "", path: filePath, exists: false });
+            }
+            else {
+                throw err;
+            }
+        }
+    }
+    catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+// PUT /api/agents/global-file - Write global AGENTS.md file
+app.put("/api/agents/global-file", (req, res) => {
+    try {
+        const { content } = req.body;
+        if (content === undefined || content === null) {
+            res.status(400).json({ error: "Content is required" });
+            return;
+        }
+        const filePath = path.join(os.homedir(), ".config/opencode/AGENTS.md");
+        fs.writeFileSync(filePath, content, "utf-8");
+        res.json({ success: true });
     }
     catch (err) {
         res.status(500).json({ error: err.message });
@@ -225,6 +358,145 @@ app.delete("/api/agents/:name/file", (req, res) => {
         catch (err) {
             res.status(500).json({ error: err.message });
         }
+    }
+    catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+// ── Agents discovery (disk scan) ──────────────────────────
+// GET /api/agents - List all agent files on disk with parsed frontmatter
+app.get("/api/agents", (_req, res) => {
+    try {
+        const agentsDir = path.join(os.homedir(), ".config/opencode/agents");
+        if (!fs.existsSync(agentsDir)) {
+            res.json([]);
+            return;
+        }
+        const files = fs.readdirSync(agentsDir).filter((f) => f.endsWith(".md"));
+        const agents = [];
+        for (const file of files) {
+            const name = file.replace(/\.md$/, "");
+            const filePath = path.join(agentsDir, file);
+            try {
+                const content = fs.readFileSync(filePath, "utf-8");
+                // Parse YAML frontmatter (simple key: value extraction)
+                const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+                let mode = "primary";
+                let description = name;
+                let model = null;
+                if (fmMatch) {
+                    for (const line of fmMatch[1].split("\n")) {
+                        const kv = line.match(/^(\w+):\s*(.+)$/);
+                        if (kv) {
+                            const [, key, val] = kv;
+                            if (key === "mode")
+                                mode = val.trim();
+                            else if (key === "description")
+                                description = val.trim();
+                            else if (key === "model")
+                                model = val.trim();
+                        }
+                    }
+                }
+                agents.push({ name, mode, description, model });
+            }
+            catch {
+                // skip unreadable files
+            }
+        }
+        res.json(agents);
+    }
+    catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+// ── Models API ───────────────────────────────────────────
+// Cache available models from opencode
+let cachedModels = [];
+let modelsFetchedAt = 0;
+// GET /api/models - List available models from opencode
+app.get("/api/models", async (_req, res) => {
+    try {
+        const now = Date.now();
+        if (now - modelsFetchedAt < 300000 && cachedModels.length > 0) {
+            res.json(cachedModels);
+            return;
+        }
+        const providerRes = await fetch(`${OPENCODE_SERVER}/provider`);
+        if (!providerRes.ok) {
+            res.json(cachedModels.length > 0 ? cachedModels : []);
+            return;
+        }
+        const data = (await providerRes.json());
+        const models = [];
+        for (const provider of data.all) {
+            if (data.connected && !data.connected.includes(provider.id))
+                continue;
+            for (const [modelId, model] of Object.entries(provider.models)) {
+                models.push({
+                    providerID: provider.id,
+                    modelID: modelId,
+                    name: model.name || modelId,
+                });
+            }
+        }
+        cachedModels = models;
+        modelsFetchedAt = now;
+        res.json(models);
+    }
+    catch {
+        res.json(cachedModels.length > 0 ? cachedModels : []);
+    }
+});
+// POST /api/agents - Create a new agent
+app.post("/api/agents", (req, res) => {
+    try {
+        const { name, mode, description, model, content } = req.body;
+        // Validate name
+        if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) {
+            res
+                .status(400)
+                .json({
+                error: "Invalid agent name. Use only letters, numbers, hyphens, and underscores.",
+            });
+            return;
+        }
+        // Validate mode
+        if (!mode || (mode !== "primary" && mode !== "subagent")) {
+            res
+                .status(400)
+                .json({ error: "Mode must be 'primary' or 'subagent'" });
+            return;
+        }
+        const agentsDir = path.join(os.homedir(), ".config/opencode/agents");
+        const filePath = path.join(agentsDir, `${name}.md`);
+        // Check file doesn't already exist
+        if (fs.existsSync(filePath)) {
+            res.status(409).json({ error: `Agent "${name}" already exists` });
+            return;
+        }
+        // Build content
+        let fileContent;
+        if (content) {
+            fileContent = content;
+        }
+        else {
+            const desc = description || name;
+            const modelLine = model ? `model: ${model}\n` : "";
+            fileContent = `---\ndescription: ${desc}\nmode: ${mode}\n${modelLine}---\n\n# ${name} agent\n\n`;
+        }
+        // Ensure directory exists
+        if (!fs.existsSync(agentsDir)) {
+            fs.mkdirSync(agentsDir, { recursive: true });
+        }
+        fs.writeFileSync(filePath, fileContent, "utf-8");
+        // Restart opencode serve to pick up the new agent file
+        restartOpencodeServe().then(({ restarted, error }) => {
+            if (!restarted && error !== "opencode serve not running") {
+                console.warn(`[agents] opencode restart after create failed: ${error}`);
+            }
+        });
+        res.json({ success: true, name });
     }
     catch (err) {
         res.status(500).json({ error: err.message });
@@ -1429,6 +1701,19 @@ function subscribeToOpencodeEvents() {
                                         }
                                     }
                                     previousSessionStatuses.set(sessionID, currentStatus);
+                                }
+                                // Relay streaming message events to frontend via event bus
+                                if (eventData.type === "message.part.updated" && eventData.properties?.sessionID) {
+                                    bus.emit("opencode_message_part_updated", {
+                                        sessionID: eventData.properties.sessionID,
+                                        part: eventData.properties.part,
+                                    });
+                                }
+                                if (eventData.type === "message.updated" && eventData.properties?.sessionID) {
+                                    bus.emit("opencode_message_updated", {
+                                        sessionID: eventData.properties.sessionID,
+                                        info: eventData.properties.info,
+                                    });
                                 }
                             }
                             catch {
