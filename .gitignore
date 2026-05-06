@@ -3,4 +3,6 @@ kanban.db
 kanban.db-shm
 kanban.db-wal
 logs/
+build/
+dist/
 .DS_Store
