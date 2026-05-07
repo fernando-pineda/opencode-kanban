@@ -158,3 +158,13 @@ CREATE TABLE IF NOT EXISTS kanban_notifications (
 CREATE INDEX IF NOT EXISTS idx_notifications_board ON kanban_notifications(board_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_session ON kanban_notifications(session_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_unseen ON kanban_notifications(board_id, seen);
+
+-- GitHub integration — per-board GitHub token and selected repos
+CREATE TABLE IF NOT EXISTS kanban_github_configs (
+  board_id INTEGER PRIMARY KEY REFERENCES kanban_boards(id) ON DELETE CASCADE,
+  github_token TEXT NOT NULL,
+  selected_repos TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_github_configs_board ON kanban_github_configs(board_id);

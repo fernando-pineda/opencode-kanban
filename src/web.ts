@@ -194,7 +194,18 @@ import {
   markAllNotificationsSeen,
   markSessionNotificationsSeen,
   getNotificationBoardForSession,
+  getGitHubConfig,
+  saveGitHubConfig,
+  updateGitHubSelectedRepos,
+  deleteGitHubConfig,
 } from "./db.js";
+import {
+  validateGitHubToken,
+  listGitHubRepos,
+  listGitHubIssues,
+  getGitHubIssue,
+  parseRepoFullName,
+} from "./github.js";
 import {
   searchMemories,
   getMemories,
@@ -935,6 +946,218 @@ app.put("/api/boards/reorder", (req: Request, res: Response) => {
     }
     reorderBoards(board_ids);
     res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// ── GitHub integration ─────────────────────────────────────────
+
+// GET config (token masked)
+app.get("/api/boards/:id/github/config", (req: Request, res: Response) => {
+  try {
+    const boardId = parseInt(req.params.id, 10);
+    const config = getGitHubConfig(boardId);
+    if (!config) {
+      return res.json({
+        board_id: boardId,
+        has_token: false,
+        token_masked: "",
+        selected_repos: [],
+        created_at: "",
+        updated_at: "",
+      } satisfies import("./types.js").GitHubConfig);
+    }
+    const token = config.github_token;
+    const masked = token.length > 8
+      ? token.slice(0, 4) + "****" + token.slice(-4)
+      : "****";
+    res.json({
+      board_id: config.board_id,
+      has_token: true,
+      token_masked: masked,
+      selected_repos: JSON.parse(config.selected_repos || "[]"),
+      created_at: config.created_at,
+      updated_at: config.updated_at,
+    });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// PUT save token + validate
+app.put("/api/boards/:id/github/config", async (req: Request, res: Response) => {
+  try {
+    const boardId = parseInt(req.params.id, 10);
+    const { token } = req.body as { token?: string };
+    if (!token?.trim()) {
+      return res.status(400).json({ error: "Token is required" });
+    }
+    // Validate the token first
+    const validation = await validateGitHubToken(token.trim());
+    if (!validation.valid) {
+      return res.status(400).json({ error: "Invalid GitHub token" });
+    }
+    // Save with empty selected repos initially
+    saveGitHubConfig(boardId, token.trim(), []);
+    res.json({ success: true, user: validation.user });
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message });
+  }
+});
+
+// DELETE remove config
+app.delete("/api/boards/:id/github/config", (req: Request, res: Response) => {
+  try {
+    const boardId = parseInt(req.params.id, 10);
+    deleteGitHubConfig(boardId);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// GET accessible repos (from stored token)
+app.get("/api/boards/:id/github/repos", async (req: Request, res: Response) => {
+  try {
+    const boardId = parseInt(req.params.id, 10);
+    const config = getGitHubConfig(boardId);
+    if (!config) {
+      return res.status(404).json({ error: "GitHub not configured for this board" });
+    }
+    const repos = await listGitHubRepos(config.github_token);
+    const selectedRepos: string[] = JSON.parse(config.selected_repos || "[]");
+    res.json({ repos, selected_repos: selectedRepos });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// PUT update selected repos
+app.put("/api/boards/:id/github/repos", (req: Request, res: Response) => {
+  try {
+    const boardId = parseInt(req.params.id, 10);
+    const { selected_repos } = req.body as { selected_repos?: string[] };
+    if (!Array.isArray(selected_repos)) {
+      return res.status(400).json({ error: "selected_repos must be an array" });
+    }
+    updateGitHubSelectedRepos(boardId, selected_repos);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// GET issues for selected repos
+app.get("/api/boards/:id/github/issues", async (req: Request, res: Response) => {
+  try {
+    const boardId = parseInt(req.params.id, 10);
+    const config = getGitHubConfig(boardId);
+    if (!config) {
+      return res.status(404).json({ error: "GitHub not configured for this board" });
+    }
+    const selectedRepos: string[] = JSON.parse(config.selected_repos || "[]");
+    if (selectedRepos.length === 0) {
+      return res.json({ repos: {} });
+    }
+    const state = (req.query.state as string) || "open";
+    const repoParam = req.query.repo as string | undefined;
+
+    // If specific repo requested, only fetch that one
+    const reposToFetch = repoParam ? [repoParam] : selectedRepos;
+    const result: Record<string, import("./types.js").GitHubIssue[]> = {};
+
+    for (const fullName of reposToFetch) {
+      try {
+        const { owner, repo } = parseRepoFullName(fullName);
+        const { issues } = await listGitHubIssues(config.github_token, owner, repo, {
+          state: state as "open" | "closed" | "all",
+        });
+        result[fullName] = issues;
+      } catch (err) {
+        // If one repo fails, still return others
+        result[fullName] = [];
+        console.error(`[github] Failed to fetch issues for ${fullName}:`, err);
+      }
+    }
+    res.json({ repos: result });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// GET single issue detail
+app.get("/api/boards/:id/github/issues/:owner/:repo/:number", async (req: Request, res: Response) => {
+  try {
+    const boardId = parseInt(req.params.id, 10);
+    const config = getGitHubConfig(boardId);
+    if (!config) {
+      return res.status(404).json({ error: "GitHub not configured for this board" });
+    }
+    const { owner, repo, number } = req.params;
+    const issue = await getGitHubIssue(
+      config.github_token,
+      owner,
+      repo,
+      parseInt(number, 10)
+    );
+    res.json(issue);
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// POST spawn agent from issue
+app.post("/api/boards/:id/github/spawn", async (req: Request, res: Response) => {
+  try {
+    const boardId = parseInt(req.params.id, 10);
+    const { issue, agent } = req.body as {
+      issue?: { title: string; body: string; html_url: string; number: number; repository_url: string };
+      agent?: string;
+    };
+    if (!issue) {
+      return res.status(400).json({ error: "Issue data is required" });
+    }
+
+    // Get board info for directory
+    const boardFull = getBoardFull(boardId);
+
+    // Create session via opencode
+    const url = new URL(`${OPENCODE_SERVER}/session`);
+    if (boardFull.board.repo_path) url.searchParams.set("directory", boardFull.board.repo_path);
+    const sessionRes = await fetch(url.toString(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: `GH #${issue.number}: ${issue.title}` }),
+    });
+    if (!sessionRes.ok) {
+      const body = await sessionRes.text().catch(() => "");
+      return res.status(sessionRes.status).json({ error: body || `opencode error ${sessionRes.status}` });
+    }
+    const session = await sessionRes.json();
+
+    // Build the prompt from the issue
+    const prompt = `## GitHub Issue #${issue.number}\n\n**Title:** ${issue.title}\n**URL:** ${issue.html_url}\n\n${issue.body || "(no description)"}\n\n---\n\nPlease analyze and address this GitHub issue.`;
+
+    // Send the message via opencode
+    const parts: object[] = [];
+    const mandatoryContext = getMandatoryContext(session.id);
+    if (mandatoryContext.trim()) {
+      parts.push({ type: "text", text: `<mandatory>\n${mandatoryContext}\n</mandatory>` });
+    }
+    parts.push({ type: "text", text: prompt });
+
+    const messageUrl = new URL(`${OPENCODE_SERVER}/session/${session.id}/prompt_async`);
+    const sessionDir = getSessionDirectory(session.id) || boardFull.board.repo_path;
+    if (sessionDir) messageUrl.searchParams.set("directory", sessionDir);
+    await fetch(messageUrl.toString(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ parts, ...(agent ? { agent } : {}) }),
+    });
+
+    emitBoardChange("card_created", { session_id: session.id, board_id: boardId });
+    res.json({ session_id: session.id, title: session.title });
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
   }
