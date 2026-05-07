@@ -125,17 +125,47 @@ echo ""
 
 info "Building backend (npm install + tsc)..."
 cd "$REPO_DIR"
-"$NPM_PATH" install --production=false 2>&1 | tail -1
-"$NPM_PATH" run build 2>&1 | tail -3
+BUILD_LOG=$(mktemp)
+if ! "$NPM_PATH" install --production=false > "$BUILD_LOG" 2>&1; then
+    cat "$BUILD_LOG"
+    rm -f "$BUILD_LOG"
+    fail "npm install failed"
+fi
+rm -f "$BUILD_LOG"
+BUILD_LOG=$(mktemp)
+if ! "$NPM_PATH" run build > "$BUILD_LOG" 2>&1; then
+    cat "$BUILD_LOG"
+    rm -f "$BUILD_LOG"
+    fail "npm run build failed"
+fi
+rm -f "$BUILD_LOG"
+if [ ! -f "$REPO_DIR/build/web.js" ]; then
+    fail "Backend build failed — build/web.js not found"
+fi
 ok "Backend built"
 
 info "Building frontend (web/)..."
 cd "$REPO_DIR/web"
-"$NPM_PATH" install 2>&1 | tail -1
+BUILD_LOG=$(mktemp)
+if ! "$NPM_PATH" install > "$BUILD_LOG" 2>&1; then
+    cat "$BUILD_LOG"
+    rm -f "$BUILD_LOG"
+    fail "npm install (frontend) failed"
+fi
+rm -f "$BUILD_LOG"
 # Use vite build directly — tsc type-check can fail on shadcn components
 # but vite compiles fine with esbuild
 NPM_BIN="$(dirname "$NPM_PATH")"
-"$NPM_BIN/npx" vite build 2>&1 | tail -3
+BUILD_LOG=$(mktemp)
+if ! "$NPM_BIN/npx" vite build > "$BUILD_LOG" 2>&1; then
+    cat "$BUILD_LOG"
+    rm -f "$BUILD_LOG"
+    fail "vite build failed"
+fi
+rm -f "$BUILD_LOG"
+if [ ! -f "$REPO_DIR/dist/web/index.html" ]; then
+    fail "Frontend build failed — dist/web/index.html not found"
+fi
 ok "Frontend built"
 
 cd "$REPO_DIR"
@@ -147,6 +177,7 @@ echo ""
 # ── 3. Generate scripts/start-web.sh ────────────────────────────
 
 info "Generating scripts/start-web.sh..."
+  mkdir -p "$REPO_DIR/scripts"
   NODE_BIN_DIR="$(dirname "$NODE_PATH")"
   cat > "$REPO_DIR/scripts/start-web.sh" << SCRIPT
 #!/bin/bash
@@ -324,21 +355,22 @@ PLIST
 
   # Unload if already loaded, then load
   launchctl bootout "gui/$(id -u)/com.opencode-kanban.web" 2>/dev/null || true
-  launchctl bootstrap "gui/$(id -u)" "$KANBAN_PLIST" 2>/dev/null || true
+  if ! launchctl bootstrap "gui/$(id -u)" "$KANBAN_PLIST" 2>/dev/null; then
+    warn "  Failed to bootstrap web plist (may already be loaded or needs sudo)"
+  fi
   ok "  com.opencode-kanban.web.plist loaded"
 
   # --- OpenCode Serve ---
   SERVE_PLIST="$LAUNCHD_DIR/com.opencode.serve.plist"
 
-  if [ ! -f "$SERVE_PLIST" ]; then
-    info "  Creating com.opencode.serve.plist (new)..."
+  info "  Generating com.opencode.serve.plist..."
 
-    OPENCODE_DIR=$(dirname "$OPENCODE_PATH")
-    NODE_BIN_DIR="$(dirname "$NODE_PATH")"
-    # Build PATH that includes opencode's directory AND Node.js (nvm) directory
-    PLIST_PATH="${NODE_BIN_DIR}:${OPENCODE_DIR}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+  OPENCODE_DIR=$(dirname "$OPENCODE_PATH")
+  NODE_BIN_DIR="$(dirname "$NODE_PATH")"
+  # Build PATH that includes opencode's directory AND Node.js (nvm) directory
+  PLIST_PATH="${NODE_BIN_DIR}:${OPENCODE_DIR}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
-    cat > "$SERVE_PLIST" << PLIST
+  cat > "$SERVE_PLIST" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -369,19 +401,18 @@ PLIST
     <dict>
         <key>PATH</key>
         <string>${PLIST_PATH}</string>
+        <key>HOME</key>
+        <string>${HOME}</string>
     </dict>
 </dict>
 </plist>
 PLIST
 
-    launchctl bootstrap "gui/$(id -u)" "$SERVE_PLIST" 2>/dev/null || true
-    ok "  com.opencode.serve.plist created and loaded"
-  else
-    # Already exists — just ensure it's loaded
-    launchctl bootout "gui/$(id -u)/com.opencode.serve" 2>/dev/null || true
-    launchctl bootstrap "gui/$(id -u)" "$SERVE_PLIST" 2>/dev/null || true
-    ok "  com.opencode.serve.plist already exists (re-loaded)"
+  launchctl bootout "gui/$(id -u)/com.opencode.serve" 2>/dev/null || true
+  if ! launchctl bootstrap "gui/$(id -u)" "$SERVE_PLIST" 2>/dev/null; then
+    warn "  Failed to bootstrap opencode serve plist (may already be loaded or needs sudo)"
   fi
+  ok "  com.opencode.serve.plist loaded"
 
   echo ""
 else
@@ -396,9 +427,17 @@ fi
 
 info "Verifying installation..."
 
-sleep 3
+sleep 5
 
 ERRORS=0
+
+# Check for port conflicts
+for PORT in 3210 4096; do
+    if lsof -i ":$PORT" -sTCP:LISTEN -P -n 2>/dev/null | grep -qv "node\|opencode" ; then
+        warn "Port $PORT is in use by another process"
+        lsof -i ":$PORT" -sTCP:LISTEN -P -n 2>/dev/null | head -3
+    fi
+done
 
 # Check web server
 if curl -sf -o /dev/null "http://localhost:3210/api/boards" 2>/dev/null; then

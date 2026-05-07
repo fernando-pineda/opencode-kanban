@@ -1622,7 +1622,7 @@ app.get("/api/events", (req: Request, res: Response) => {
     res.write(`data: ${JSON.stringify(payload)}\n\n`);
   };
 
-  // Listen to all event types
+  // Listen to all event types (includes opencode_session_status)
   const cleanup: (() => void)[] = [];
   for (const eventType of Object.values(EVENT_TYPES)) {
     const typedHandler = (payload: any) =>
@@ -1630,14 +1630,6 @@ app.get("/api/events", (req: Request, res: Response) => {
     bus.on(eventType as KanbanEvents, typedHandler as any);
     cleanup.push(() => bus.off(eventType as KanbanEvents, typedHandler as any));
   }
-  // Also relay opencode session status events
-  const statusHandler = (payload: any) => {
-    handler({ type: "opencode_session_status", ...payload });
-  };
-  bus.on("opencode_session_status" as any, statusHandler as any);
-  cleanup.push(() =>
-    bus.off("opencode_session_status" as any, statusHandler as any),
-  );
 
   req.on("close", () => {
     cleanup.forEach((fn) => fn());

@@ -70,6 +70,8 @@ class KanbanEventBus extends EventEmitter {
 // ── Singleton instance ──────────────────────────────────────
 
 export const bus = new KanbanEventBus();
+// Allow many concurrent SSE clients (each registers ~14 event listeners)
+bus.setMaxListeners(50);
 
 // ── Convenience function ────────────────────────────────────
 
