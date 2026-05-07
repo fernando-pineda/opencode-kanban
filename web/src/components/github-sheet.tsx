@@ -24,6 +24,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import {
   Select,
   SelectContent,
@@ -44,6 +45,7 @@ import {
   Search,
   LayoutList,
   FolderGit2,
+  SlidersHorizontal,
 } from 'lucide-react'
 import type {
   GitHubConfig,
@@ -114,12 +116,21 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
   const [activeRepoTab, setActiveRepoTab] = useState<string>('')
   const [issuesFilter, setIssuesFilter] = useState('')
 
+  // Issues filters (advanced)
+  const [issuesStateFilter, setIssuesStateFilter] = useState<'open' | 'closed' | 'all'>('open')
+  const [issuesAssigneeFilter, setIssuesAssigneeFilter] = useState<string>('all')
+  const [issuesLabelFilter, setIssuesLabelFilter] = useState<string>('all')
+
   // Projects view state
   const [projects, setProjects] = useState<GitHubProject[]>([])
   const [activeProjectTab, setActiveProjectTab] = useState<string>('')
   const [projectItems, setProjectItems] = useState<GitHubProjectItem[]>([])
   const [loadingProjectItems, setLoadingProjectItems] = useState(false)
   const [projectItemsFilter, setProjectItemsFilter] = useState('')
+
+  // Project items filters (advanced)
+  const [projectsTypeFilter, setProjectsTypeFilter] = useState<string>('all')
+  const [projectsAssigneeFilter, setProjectsAssigneeFilter] = useState<string>('all')
 
   // Spawn dialog state
   const [spawnDialogOpen, setSpawnDialogOpen] = useState(false)
@@ -153,6 +164,9 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
     setLoadingIssues(false)
     setActiveRepoTab('')
     setIssuesFilter('')
+    setIssuesStateFilter('open')
+    setIssuesAssigneeFilter('all')
+    setIssuesLabelFilter('all')
     setSpawnDialogOpen(false)
     setSpawnIssue(null)
     setSpawnAgent('')
@@ -470,12 +484,41 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
   // ── Render helpers ─────────────────────────────────────────────
 
   const currentRepoIssues = activeRepoTab ? (issuesByRepo[activeRepoTab] || []) : []
-  const filteredIssues = issuesFilter
-    ? currentRepoIssues.filter(i =>
-        i.title.toLowerCase().includes(issuesFilter.toLowerCase()) ||
-        i.labels.some(l => l.name.toLowerCase().includes(issuesFilter.toLowerCase()))
-      )
-    : currentRepoIssues
+  const filteredIssues = currentRepoIssues
+    .filter(i => {
+      // State filter
+      if (issuesStateFilter !== 'all' && i.state !== issuesStateFilter) return false
+      // Assignee filter
+      if (issuesAssigneeFilter !== 'all') {
+        const hasAssignee = i.assignees.some(a => a.login === issuesAssigneeFilter)
+        if (!hasAssignee) return false
+      }
+      // Label filter
+      if (issuesLabelFilter !== 'all') {
+        const hasLabel = i.labels.some(l => l.name === issuesLabelFilter)
+        if (!hasLabel) return false
+      }
+      // Text filter
+      if (issuesFilter) {
+        return i.title.toLowerCase().includes(issuesFilter.toLowerCase()) ||
+          i.labels.some(l => l.name.toLowerCase().includes(issuesFilter.toLowerCase()))
+      }
+      return true
+    })
+
+  // Derived filter options from current repo issues
+  const uniqueAssignees = Array.from(
+    new Map(currentRepoIssues.flatMap(i => i.assignees.map(a => [a.login, a]))).values()
+  )
+  const uniqueLabels = Array.from(
+    new Map(currentRepoIssues.flatMap(i => i.labels.map(l => [l.name, l]))).values()
+  )
+
+  const issuesActiveFilterCount = [issuesStateFilter !== 'open', issuesAssigneeFilter !== 'all', issuesLabelFilter !== 'all'].filter(Boolean).length
+  const uniqueProjectAssignees = Array.from(
+    new Map(projectItems.flatMap(i => i.assignees.map(a => [a.login, a]))).values()
+  )
+  const projectsActiveFilterCount = [projectsTypeFilter !== 'all', projectsAssigneeFilter !== 'all'].filter(Boolean).length
 
   const filteredRepos = repoFilter
     ? repos.filter(r =>
@@ -492,13 +535,23 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
       )
     : allProjects
 
-  const filteredProjectItems = projectItemsFilter
-    ? projectItems.filter(i =>
-        i.title.toLowerCase().includes(projectItemsFilter.toLowerCase()) ||
-        (i.status && i.status.toLowerCase().includes(projectItemsFilter.toLowerCase())) ||
-        (i.repository && i.repository.toLowerCase().includes(projectItemsFilter.toLowerCase()))
-      )
-    : projectItems
+  const filteredProjectItems = projectItems
+    .filter(i => {
+      // Type filter
+      if (projectsTypeFilter !== 'all' && i.type !== projectsTypeFilter) return false
+      // Assignee filter
+      if (projectsAssigneeFilter !== 'all') {
+        const hasAssignee = i.assignees.some(a => a.login === projectsAssigneeFilter)
+        if (!hasAssignee) return false
+      }
+      // Text filter
+      if (projectItemsFilter) {
+        return i.title.toLowerCase().includes(projectItemsFilter.toLowerCase()) ||
+          (i.status && i.status.toLowerCase().includes(projectItemsFilter.toLowerCase())) ||
+          (i.repository && i.repository.toLowerCase().includes(projectItemsFilter.toLowerCase()))
+      }
+      return true
+    })
 
   // Virtualizer: repo picker
   const repoScrollRef = useRef<HTMLDivElement>(null)
@@ -958,7 +1011,7 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
                 <div className="border-b px-4">
                   <Tabs
                     value={activeRepoTab}
-                    onValueChange={setActiveRepoTab}
+                    onValueChange={(val) => { setActiveRepoTab(val); setIssuesAssigneeFilter('all'); setIssuesLabelFilter('all') }}
                   >
                     <TabsList variant="line" className="w-full overflow-x-auto">
                       {config.selected_repos.map(repo => (
@@ -972,14 +1025,73 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
 
                 {/* Search bar */}
                 <div className="px-4 py-2 border-b">
-                  <div className="relative">
-                    <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
-                    <Input
-                      placeholder="Filter issues..."
-                      value={issuesFilter}
-                      onChange={e => setIssuesFilter(e.target.value)}
-                      className="pl-8 h-8 text-xs"
-                    />
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1">
+                      <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                      <Input
+                        placeholder="Filter issues..."
+                        value={issuesFilter}
+                        onChange={e => setIssuesFilter(e.target.value)}
+                        className="pl-8 h-8 text-xs"
+                      />
+                    </div>
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button variant="outline" size="sm" className="h-8 px-2 relative">
+                          <SlidersHorizontal className="h-3.5 w-3.5" />
+                          {issuesActiveFilterCount > 0 && (
+                            <span className="absolute -top-1 -right-1 h-3.5 w-3.5 rounded-full bg-primary text-[8px] text-primary-foreground flex items-center justify-center">{issuesActiveFilterCount}</span>
+                          )}
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent align="end" className="w-56 p-3 space-y-3">
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-medium">State</label>
+                          <Select value={issuesStateFilter} onValueChange={(v) => setIssuesStateFilter(v as 'open' | 'closed' | 'all')}>
+                            <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="open">Open</SelectItem>
+                              <SelectItem value="closed">Closed</SelectItem>
+                              <SelectItem value="all">All</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-medium">Assignee</label>
+                          <Select value={issuesAssigneeFilter} onValueChange={setIssuesAssigneeFilter}>
+                            <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="all">Anyone</SelectItem>
+                              {uniqueAssignees.map(a => (
+                                <SelectItem key={a.login} value={a.login}>{a.login}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-medium">Label</label>
+                          <Select value={issuesLabelFilter} onValueChange={setIssuesLabelFilter}>
+                            <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="all">Any label</SelectItem>
+                              {uniqueLabels.map(l => (
+                                <SelectItem key={l.name} value={l.name}>
+                                  <span className="flex items-center gap-1.5">
+                                    <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: `#${l.color}` }} />
+                                    {l.name}
+                                  </span>
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        {(issuesActiveFilterCount > 0) && (
+                          <Button variant="ghost" size="sm" className="w-full h-7 text-xs" onClick={() => { setIssuesStateFilter('open'); setIssuesAssigneeFilter('all'); setIssuesLabelFilter('all') }}>
+                            Clear filters
+                          </Button>
+                        )}
+                      </PopoverContent>
+                    </Popover>
                   </div>
                 </div>
 
@@ -1216,7 +1328,9 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
                         value={activeProjectTab}
                         onValueChange={(val) => {
                           setActiveProjectTab(val)
-                          setProjectItemsFilter('')
+    setProjectItemsFilter('')
+    setProjectsTypeFilter('all')
+    setProjectsAssigneeFilter('all')
                           setDetailProjectItem(null)
                         }}
                       >
@@ -1232,14 +1346,57 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
 
                     {/* Search bar */}
                     <div className="px-4 py-2 border-b">
-                      <div className="relative">
-                        <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
-                        <Input
-                          placeholder="Filter items..."
-                          value={projectItemsFilter}
-                          onChange={e => setProjectItemsFilter(e.target.value)}
-                          className="pl-8 h-8 text-xs"
-                        />
+                      <div className="flex items-center gap-2">
+                        <div className="relative flex-1">
+                          <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                          <Input
+                            placeholder="Filter items..."
+                            value={projectItemsFilter}
+                            onChange={e => setProjectItemsFilter(e.target.value)}
+                            className="pl-8 h-8 text-xs"
+                          />
+                        </div>
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <Button variant="outline" size="sm" className="h-8 px-2 relative">
+                              <SlidersHorizontal className="h-3.5 w-3.5" />
+                              {projectsActiveFilterCount > 0 && (
+                                <span className="absolute -top-1 -right-1 h-3.5 w-3.5 rounded-full bg-primary text-[8px] text-primary-foreground flex items-center justify-center">{projectsActiveFilterCount}</span>
+                              )}
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent align="end" className="w-56 p-3 space-y-3">
+                            <div className="space-y-1.5">
+                              <label className="text-xs font-medium">Type</label>
+                              <Select value={projectsTypeFilter} onValueChange={setProjectsTypeFilter}>
+                                <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="all">All types</SelectItem>
+                                  <SelectItem value="ISSUE">Issues</SelectItem>
+                                  <SelectItem value="PULL_REQUEST">Pull Requests</SelectItem>
+                                  <SelectItem value="DRAFT_ISSUE">Draft Issues</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div className="space-y-1.5">
+                              <label className="text-xs font-medium">Assignee</label>
+                              <Select value={projectsAssigneeFilter} onValueChange={setProjectsAssigneeFilter}>
+                                <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="all">Anyone</SelectItem>
+                                  {uniqueProjectAssignees.map(a => (
+                                    <SelectItem key={a.login} value={a.login}>{a.login}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            {projectsActiveFilterCount > 0 && (
+                              <Button variant="ghost" size="sm" className="w-full h-7 text-xs" onClick={() => { setProjectsTypeFilter('all'); setProjectsAssigneeFilter('all') }}>
+                                Clear filters
+                              </Button>
+                            )}
+                          </PopoverContent>
+                        </Popover>
                       </div>
                     </div>
 
