@@ -15,13 +15,14 @@ import {
 import { BoardFull, Card } from "../types";
 import KanbanColumn from "./kanban-column";
 import MemoriesSheet from "./memories-sheet";
+import GithubSheet from "./github-sheet";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Brain, PlusCircle } from "lucide-react";
+import { Brain, Github, PlusCircle } from "lucide-react";
 
 interface KanbanBoardProps {
   board: BoardFull;
@@ -37,6 +38,7 @@ export default function KanbanBoard({
   onNewSession,
 }: KanbanBoardProps) {
   const [memoriesOpen, setMemoriesOpen] = useState(false);
+  const [githubOpen, setGithubOpen] = useState(false);
   const [activeCard, setActiveCard] = useState<Card | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
 
@@ -131,6 +133,11 @@ export default function KanbanBoard({
                 onClick: () => setMemoriesOpen(true),
               },
               {
+                icon: Github,
+                label: "GitHub",
+                onClick: () => setGithubOpen(true),
+              },
+              {
                 icon: PlusCircle,
                 label: "New Session",
                 onClick: onNewSession || (() => {}),
@@ -198,6 +205,11 @@ export default function KanbanBoard({
         repoPath={board.board.repo_path}
         open={memoriesOpen}
         onOpenChange={setMemoriesOpen}
+      />
+      <GithubSheet
+        boardId={boardId}
+        open={githubOpen}
+        onOpenChange={setGithubOpen}
       />
     </div>
   );

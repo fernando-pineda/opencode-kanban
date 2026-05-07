@@ -77,10 +77,35 @@ function migrateAddBoardPosition() {
         console.error("[kanban-db] Migration error (non-fatal):", err);
     }
 }
+function migrateAddGitHubConfigs() {
+    try {
+        const tableInfo = db
+            .prepare("PRAGMA table_info(kanban_github_configs)")
+            .all();
+        if (tableInfo.length === 0) {
+            console.error("[kanban-db] Creating kanban_github_configs table...");
+            db.exec(`
+        CREATE TABLE IF NOT EXISTS kanban_github_configs (
+          board_id INTEGER PRIMARY KEY REFERENCES kanban_boards(id) ON DELETE CASCADE,
+          github_token TEXT NOT NULL,
+          selected_repos TEXT NOT NULL DEFAULT '[]',
+          created_at TEXT DEFAULT (datetime('now')),
+          updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_github_configs_board ON kanban_github_configs(board_id);
+      `);
+            console.error("[kanban-db] Migration complete: kanban_github_configs table created.");
+        }
+    }
+    catch (err) {
+        console.error("[kanban-db] Migration error (non-fatal):", err);
+    }
+}
 try {
     db = initDb();
     migrateAddReadyStatus();
     migrateAddBoardPosition();
+    migrateAddGitHubConfigs();
     console.error(`[kanban-db] Connected to opencode.db: ${OPENCODE_DB_PATH}`);
 }
 catch (err) {
@@ -112,7 +137,7 @@ export function getSessionFirstUserMessage(sessionId) {
 export function getSessionTokens(sessionId) {
     try {
         const row = db
-            .prepare('SELECT data FROM message WHERE session_id = ? AND json_extract(data, \'$.role\') = \'assistant\' AND json_extract(data, \'$.tokens.total\') IS NOT NULL ORDER BY time_created DESC LIMIT 1')
+            .prepare("SELECT data FROM message WHERE session_id = ? AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.tokens.total') IS NOT NULL ORDER BY time_created DESC LIMIT 1")
             .get(sessionId);
         if (!row)
             return 0;
@@ -555,7 +580,9 @@ export function getSessionMessages(sessionId, limit = 50, offset = 0) {
                     callID: partData.callID || "",
                     status: state.status,
                     input: state.input,
-                    output: typeof state.output === "string" ? state.output : state.metadata?.output || "",
+                    output: typeof state.output === "string"
+                        ? state.output
+                        : state.metadata?.output || "",
                 });
             }
             else if (partData.type === "compaction") {
@@ -642,17 +669,19 @@ export function updateRule(ruleId, data) {
     values.push(new Date().toISOString());
     values.push(ruleId);
     db.prepare(`UPDATE kanban_rules SET ${sets.join(", ")} WHERE id = ?`).run(...values);
-    return db.prepare("SELECT * FROM kanban_rules WHERE id = ?").get(ruleId) || null;
+    return (db.prepare("SELECT * FROM kanban_rules WHERE id = ?").get(ruleId) || null);
 }
 export function deleteRule(ruleId) {
-    const result = db.prepare("DELETE FROM kanban_rules WHERE id = ?").run(ruleId);
+    const result = db
+        .prepare("DELETE FROM kanban_rules WHERE id = ?")
+        .run(ruleId);
     return result.changes > 0;
 }
 export function getEnabledRulesContent() {
     const rules = db
         .prepare("SELECT content FROM kanban_rules WHERE enabled = 1 ORDER BY position ASC")
         .all();
-    return rules.map(r => r.content).join("\n\n");
+    return rules.map((r) => r.content).join("\n\n");
 }
 // ── Settings functions ──────────────────────────────────────────
 export function getSetting(key) {
@@ -731,13 +760,17 @@ export function deleteSession(sessionId) {
 // ── Epic functions ─────────────────────────────────────────
 export function deriveTaskKeyPrefix(boardName) {
     const parts = boardName
-        .replace(/([a-z])([A-Z])/g, '$1 $2')
+        .replace(/([a-z])([A-Z])/g, "$1 $2")
         .split(/[-_\s]+/)
         .filter(Boolean);
     if (parts.length === 1) {
         return parts[0].substring(0, 2).toUpperCase();
     }
-    return parts.map(p => p[0]).join('').toUpperCase().substring(0, 3);
+    return parts
+        .map((p) => p[0])
+        .join("")
+        .toUpperCase()
+        .substring(0, 3);
 }
 export function getNextTaskKey(boardId) {
     const board = getBoard(boardId);
@@ -766,14 +799,18 @@ export function createEpic(boardId, title, description, plannerSessionId) {
         task_key: taskKey,
         title,
         description,
-        plan_text: '',
-        status: 'planning',
+        plan_text: "",
+        status: "planning",
         planner_session_id: plannerSessionId,
-        column_name: 'Backlog',
+        column_name: "Backlog",
         created_at: now,
         updated_at: now,
     };
-    emitBoardChange("epic_updated", { epic_id: epicId, board_id: boardId, status: 'planning' });
+    emitBoardChange("epic_updated", {
+        epic_id: epicId,
+        board_id: boardId,
+        status: "planning",
+    });
     return epic;
 }
 export function updateEpic(epicId, data) {
@@ -816,12 +853,16 @@ export function updateEpic(epicId, data) {
     db.prepare(`UPDATE kanban_epics SET ${sets.join(", ")} WHERE id = ?`).run(...values);
     const updated = db.prepare("SELECT * FROM kanban_epics WHERE id = ?").get(epicId) || null;
     if (updated) {
-        emitBoardChange("epic_updated", { epic_id: updated.id, board_id: updated.board_id, status: updated.status });
+        emitBoardChange("epic_updated", {
+            epic_id: updated.id,
+            board_id: updated.board_id,
+            status: updated.status,
+        });
     }
     return updated;
 }
 export function getEpic(epicId) {
-    return db.prepare("SELECT * FROM kanban_epics WHERE id = ?").get(epicId) || null;
+    return (db.prepare("SELECT * FROM kanban_epics WHERE id = ?").get(epicId) || null);
 }
 export function getEpicsByBoard(boardId) {
     return db
@@ -834,7 +875,7 @@ export function deleteEpic(epicId) {
         return;
     // Get child session IDs before deleting
     const sessions = getEpicSessions(epicId);
-    const childSessionIds = sessions.map(s => s.session_id);
+    const childSessionIds = sessions.map((s) => s.session_id);
     // Delete epic sessions first (FK cascade should handle this, but be explicit)
     db.prepare("DELETE FROM kanban_epic_sessions WHERE epic_id = ?").run(epicId);
     // Delete the epic
@@ -851,7 +892,11 @@ export function deleteEpic(epicId) {
         db.prepare("DELETE FROM kanban_completed WHERE session_id = ?").run(epic.planner_session_id);
         db.prepare("DELETE FROM kanban_session_columns WHERE session_id = ?").run(epic.planner_session_id);
     }
-    emitBoardChange("epic_updated", { epic_id: epicId, board_id: epic.board_id, status: 'deleted' });
+    emitBoardChange("epic_updated", {
+        epic_id: epicId,
+        board_id: epic.board_id,
+        status: "deleted",
+    });
 }
 export function addEpicSession(epicId, sessionId, taskKey, subtaskIndex, title, description) {
     const result = db
@@ -869,7 +914,11 @@ export function addEpicSession(epicId, sessionId, taskKey, subtaskIndex, title, 
     };
     const epic = getEpic(epicId);
     if (epic) {
-        emitBoardChange("epic_updated", { epic_id: epicId, board_id: epic.board_id, status: epic.status });
+        emitBoardChange("epic_updated", {
+            epic_id: epicId,
+            board_id: epic.board_id,
+            status: epic.status,
+        });
     }
     return epicSession;
 }
@@ -894,10 +943,9 @@ export function updateEpicStatus(epicId) {
     if (sessions.length === 0)
         return;
     // Get completed set to check if child sessions are done
-    const completedSet = new Set(db.prepare("SELECT session_id FROM kanban_completed").all()
-        .map(r => r.session_id));
-    const allCompleted = sessions.every(s => completedSet.has(s.session_id));
-    const anyFailed = sessions.some(s => {
+    const completedSet = new Set(db.prepare("SELECT session_id FROM kanban_completed").all().map((r) => r.session_id));
+    const allCompleted = sessions.every((s) => completedSet.has(s.session_id));
+    const anyFailed = sessions.some((s) => {
         // Check if session is in a failed state — we consider it failed if it was deleted or if status indicates failure
         // For now, we check if it's completed (not failed). Real failure detection would need opencode status.
         return false; // Will be enhanced with opencode status checks
@@ -905,8 +953,8 @@ export function updateEpicStatus(epicId) {
     let newStatus = epic.status;
     let newColumn = epic.column_name;
     if (allCompleted) {
-        newStatus = 'completed';
-        newColumn = 'Done';
+        newStatus = "completed";
+        newColumn = "Done";
     }
     if (newStatus !== epic.status || newColumn !== epic.column_name) {
         updateEpic(epicId, { status: newStatus, column_name: newColumn });
@@ -934,4 +982,30 @@ export function isKeepImportant() {
 }
 export function closeDb() {
     db.close();
+}
+export function getGitHubConfig(boardId) {
+    return db
+        .prepare("SELECT * FROM kanban_github_configs WHERE board_id = ?")
+        .get(boardId);
+}
+export function saveGitHubConfig(boardId, token, selectedRepos) {
+    const reposJson = JSON.stringify(selectedRepos);
+    db.prepare(`
+    INSERT INTO kanban_github_configs (board_id, github_token, selected_repos)
+    VALUES (?, ?, ?)
+    ON CONFLICT(board_id) DO UPDATE SET
+      github_token = excluded.github_token,
+      updated_at = datetime('now')
+  `).run(boardId, token, reposJson);
+}
+export function updateGitHubSelectedRepos(boardId, selectedRepos) {
+    const reposJson = JSON.stringify(selectedRepos);
+    db.prepare(`
+    UPDATE kanban_github_configs
+    SET selected_repos = ?, updated_at = datetime('now')
+    WHERE board_id = ?
+  `).run(reposJson, boardId);
+}
+export function deleteGitHubConfig(boardId) {
+    db.prepare("DELETE FROM kanban_github_configs WHERE board_id = ?").run(boardId);
 }

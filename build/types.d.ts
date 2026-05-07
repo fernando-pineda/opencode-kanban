@@ -205,3 +205,51 @@ export interface KnowledgeSaveOptions {
     indexedBy?: string | null;
     importance?: number;
 }
+export interface GitHubConfig {
+    board_id: number;
+    has_token: boolean;
+    token_masked: string;
+    selected_repos: string[];
+    created_at: string;
+    updated_at: string;
+}
+export interface GitHubRepo {
+    id: number;
+    full_name: string;
+    name: string;
+    description: string | null;
+    private: boolean;
+    html_url: string;
+    language: string | null;
+    open_issues_count: number;
+    updated_at: string;
+}
+export interface GitHubLabel {
+    id: number;
+    name: string;
+    color: string;
+    description: string | null;
+}
+export interface GitHubUser {
+    login: string;
+    avatar_url: string;
+    html_url: string;
+}
+export interface GitHubIssue {
+    id: number;
+    number: number;
+    title: string;
+    body: string | null;
+    state: "open" | "closed";
+    html_url: string;
+    labels: GitHubLabel[];
+    assignees: GitHubUser[];
+    user: GitHubUser;
+    comments: number;
+    created_at: string;
+    updated_at: string;
+    repository_url: string;
+    pull_request?: {
+        url: string;
+    };
+}

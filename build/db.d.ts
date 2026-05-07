@@ -107,4 +107,15 @@ export declare function isMemoriesEnabled(): boolean;
 export declare function getAutoPruneDays(): number;
 export declare function isKeepImportant(): boolean;
 export declare function closeDb(): void;
+export interface GitHubConfigRow {
+    board_id: number;
+    github_token: string;
+    selected_repos: string;
+    created_at: string;
+    updated_at: string;
+}
+export declare function getGitHubConfig(boardId: number): GitHubConfigRow | undefined;
+export declare function saveGitHubConfig(boardId: number, token: string, selectedRepos: string[]): void;
+export declare function updateGitHubSelectedRepos(boardId: number, selectedRepos: string[]): void;
+export declare function deleteGitHubConfig(boardId: number): void;
 export {};

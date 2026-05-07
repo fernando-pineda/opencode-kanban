@@ -48,11 +48,15 @@ function migrateAddReadyStatus(): void {
   try {
     // Check if 'ready' is already in the constraint
     const epicCheck = db
-      .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='kanban_epics'")
+      .prepare(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='kanban_epics'",
+      )
       .get() as { sql: string } | undefined;
 
     if (epicCheck?.sql && !epicCheck.sql.includes("'ready'")) {
-      console.error("[kanban-db] Migrating kanban_epics: adding 'ready' status...");
+      console.error(
+        "[kanban-db] Migrating kanban_epics: adding 'ready' status...",
+      );
       db.exec(`
         CREATE TABLE IF NOT EXISTS kanban_epics_new (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,13 +93,43 @@ function migrateAddBoardPosition(): void {
 
     const hasPosition = tableInfo.some((col) => col.name === "position");
     if (!hasPosition) {
-      console.error("[kanban-db] Migrating kanban_boards: adding position column...");
+      console.error(
+        "[kanban-db] Migrating kanban_boards: adding position column...",
+      );
       db.exec(
         "ALTER TABLE kanban_boards ADD COLUMN position INTEGER NOT NULL DEFAULT 0",
       );
       // Assign initial positions to existing boards
-      db.prepare("UPDATE kanban_boards SET position = id WHERE position = 0").run();
+      db.prepare(
+        "UPDATE kanban_boards SET position = id WHERE position = 0",
+      ).run();
       console.error("[kanban-db] Migration complete: position column added.");
+    }
+  } catch (err) {
+    console.error("[kanban-db] Migration error (non-fatal):", err);
+  }
+}
+
+function migrateAddGitHubConfigs(): void {
+  try {
+    const tableInfo = db
+      .prepare("PRAGMA table_info(kanban_github_configs)")
+      .all() as Array<{ name: string }>;
+    if (tableInfo.length === 0) {
+      console.error("[kanban-db] Creating kanban_github_configs table...");
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS kanban_github_configs (
+          board_id INTEGER PRIMARY KEY REFERENCES kanban_boards(id) ON DELETE CASCADE,
+          github_token TEXT NOT NULL,
+          selected_repos TEXT NOT NULL DEFAULT '[]',
+          created_at TEXT DEFAULT (datetime('now')),
+          updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_github_configs_board ON kanban_github_configs(board_id);
+      `);
+      console.error(
+        "[kanban-db] Migration complete: kanban_github_configs table created.",
+      );
     }
   } catch (err) {
     console.error("[kanban-db] Migration error (non-fatal):", err);
@@ -106,6 +140,7 @@ try {
   db = initDb();
   migrateAddReadyStatus();
   migrateAddBoardPosition();
+  migrateAddGitHubConfigs();
   console.error(`[kanban-db] Connected to opencode.db: ${OPENCODE_DB_PATH}`);
 } catch (err) {
   console.error(`[kanban-db] Failed to initialize:`, err);
@@ -140,7 +175,7 @@ export function getSessionTokens(sessionId: string): number {
   try {
     const row = db
       .prepare(
-        'SELECT data FROM message WHERE session_id = ? AND json_extract(data, \'$.role\') = \'assistant\' AND json_extract(data, \'$.tokens.total\') IS NOT NULL ORDER BY time_created DESC LIMIT 1',
+        "SELECT data FROM message WHERE session_id = ? AND json_extract(data, '$.role') = 'assistant' AND json_extract(data, '$.tokens.total') IS NOT NULL ORDER BY time_created DESC LIMIT 1",
       )
       .get(sessionId) as { data: string } | undefined;
     if (!row) return 0;
@@ -169,7 +204,9 @@ export function getSessionLatestAgent(sessionId: string): string | null {
 export function getSessionExplicitColumn(sessionId: string): string | null {
   try {
     const row = db
-      .prepare("SELECT column_name FROM kanban_session_columns WHERE session_id = ?")
+      .prepare(
+        "SELECT column_name FROM kanban_session_columns WHERE session_id = ?",
+      )
       .get(sessionId) as { column_name: string } | undefined;
     return row?.column_name || null;
   } catch {
@@ -177,7 +214,10 @@ export function getSessionExplicitColumn(sessionId: string): string | null {
   }
 }
 
-export function setSessionExplicitColumn(sessionId: string, columnName: string): void {
+export function setSessionExplicitColumn(
+  sessionId: string,
+  columnName: string,
+): void {
   db.prepare(
     "INSERT OR REPLACE INTO kanban_session_columns (session_id, column_name, updated_at) VALUES (?, ?, ?)",
   ).run(sessionId, columnName, new Date().toISOString());
@@ -322,7 +362,9 @@ export function archiveBoard(boardId: number): void {
 }
 
 export function reorderBoards(boardIds: number[]): void {
-  const update = db.prepare("UPDATE kanban_boards SET position = ? WHERE id = ?");
+  const update = db.prepare(
+    "UPDATE kanban_boards SET position = ? WHERE id = ?",
+  );
   const transaction = db.transaction(() => {
     for (let i = 0; i < boardIds.length; i++) {
       update.run(i, boardIds[i]);
@@ -438,7 +480,11 @@ export function searchCards(boardId: number, query: string): Card[] {
     const isArchived = timeSinceUpdateSec >= 86400;
     const isCompleted = completedSet.has(session.id);
 
-    const columnName = determineSessionColumn(session.id, isCompleted, isArchived);
+    const columnName = determineSessionColumn(
+      session.id,
+      isCompleted,
+      isArchived,
+    );
 
     cards.push({
       session_id: session.id,
@@ -677,7 +723,11 @@ export function getBoardFull(boardId: number): BoardFull {
     const isCompleted = completedSet.has(session.id);
 
     // Determine column — agent-based (PLAN→Backlog, BUILD→In Progress)
-    const columnName = determineSessionColumn(session.id, isCompleted, isArchived);
+    const columnName = determineSessionColumn(
+      session.id,
+      isCompleted,
+      isArchived,
+    );
 
     cards.push({
       session_id: session.id,
@@ -706,23 +756,32 @@ export function getBoardFull(boardId: number): BoardFull {
 
 // ── Session messages functions ──────────────────────────────────────────────
 
- interface MessagePart {
-    type: "text" | "tool" | "step-start" | "step-finish" | "reasoning" | "patch" | "compaction" | "file" | "agent";
-    text?: string;
-    tool?: string;
-    callID?: string;
+interface MessagePart {
+  type:
+    | "text"
+    | "tool"
+    | "step-start"
+    | "step-finish"
+    | "reasoning"
+    | "patch"
+    | "compaction"
+    | "file"
+    | "agent";
+  text?: string;
+  tool?: string;
+  callID?: string;
+  status?: string;
+  input?: unknown;
+  output?: unknown;
+  auto?: boolean;
+  tail_start_id?: string;
+  state?: {
     status?: string;
     input?: unknown;
     output?: unknown;
-    auto?: boolean;
-    tail_start_id?: string;
-    state?: {
-      status?: string;
-      input?: unknown;
-      output?: unknown;
-      metadata?: { output?: string; description?: string };
-    };
-  }
+    metadata?: { output?: string; description?: string };
+  };
+}
 
 interface ToolCall {
   tool: string;
@@ -732,17 +791,17 @@ interface ToolCall {
   output?: unknown;
 }
 
- interface SessionMessage {
-    id: string;
-    role: "user" | "assistant" | "system";
-    model: string | null;
-    agent: string | null;
-    time_created: number;
-    text: string;
-    reasoning: string;
-    tool_calls: ToolCall[];
-    compactions: Array<{ auto: boolean; tail_start_id: string }>;
-  }
+interface SessionMessage {
+  id: string;
+  role: "user" | "assistant" | "system";
+  model: string | null;
+  agent: string | null;
+  time_created: number;
+  text: string;
+  reasoning: string;
+  tool_calls: ToolCall[];
+  compactions: Array<{ auto: boolean; tail_start_id: string }>;
+}
 
 export interface SessionMessagesResponse {
   session_id: string;
@@ -791,7 +850,9 @@ export function getSessionMessages(
     try {
       msgData = JSON.parse(messageRow.msg_data);
     } catch {
-      console.error(`[kanban-db] Skipping malformed message ${messageRow.id}: JSON parse failed`);
+      console.error(
+        `[kanban-db] Skipping malformed message ${messageRow.id}: JSON parse failed`,
+      );
       continue;
     }
     const role = msgData.role || "user";
@@ -820,7 +881,9 @@ export function getSessionMessages(
       try {
         partData = JSON.parse(partRow.data) as MessagePart;
       } catch {
-        console.error(`[kanban-db] Skipping malformed part in message ${messageRow.id}: JSON parse failed`);
+        console.error(
+          `[kanban-db] Skipping malformed part in message ${messageRow.id}: JSON parse failed`,
+        );
         continue;
       }
 
@@ -835,7 +898,10 @@ export function getSessionMessages(
           callID: partData.callID || "",
           status: state.status,
           input: state.input,
-          output: typeof state.output === "string" ? state.output : state.metadata?.output || "",
+          output:
+            typeof state.output === "string"
+              ? state.output
+              : state.metadata?.output || "",
         });
       } else if (partData.type === "compaction") {
         compactions.push({
@@ -879,7 +945,11 @@ export function listRules(): Rule[] {
     .all() as Rule[];
 }
 
-export function createRule(title: string = "", content: string = "", enabled: boolean = true): Rule {
+export function createRule(
+  title: string = "",
+  content: string = "",
+  enabled: boolean = true,
+): Rule {
   const maxPos = db
     .prepare("SELECT COALESCE(MAX(position), -1) + 1 as pos FROM kanban_rules")
     .get() as { pos: number };
@@ -903,7 +973,12 @@ export function createRule(title: string = "", content: string = "", enabled: bo
 
 export function updateRule(
   ruleId: number,
-  data: { title?: string; content?: string; enabled?: boolean; position?: number },
+  data: {
+    title?: string;
+    content?: string;
+    enabled?: boolean;
+    position?: number;
+  },
 ): Rule | null {
   const rule = db
     .prepare("SELECT * FROM kanban_rules WHERE id = ?")
@@ -913,10 +988,22 @@ export function updateRule(
   const sets: string[] = [];
   const values: any[] = [];
 
-  if (data.title !== undefined) { sets.push("title = ?"); values.push(data.title); }
-  if (data.content !== undefined) { sets.push("content = ?"); values.push(data.content); }
-  if (data.enabled !== undefined) { sets.push("enabled = ?"); values.push(data.enabled ? 1 : 0); }
-  if (data.position !== undefined) { sets.push("position = ?"); values.push(data.position); }
+  if (data.title !== undefined) {
+    sets.push("title = ?");
+    values.push(data.title);
+  }
+  if (data.content !== undefined) {
+    sets.push("content = ?");
+    values.push(data.content);
+  }
+  if (data.enabled !== undefined) {
+    sets.push("enabled = ?");
+    values.push(data.enabled ? 1 : 0);
+  }
+  if (data.position !== undefined) {
+    sets.push("position = ?");
+    values.push(data.position);
+  }
 
   if (sets.length === 0) return rule;
 
@@ -924,21 +1011,31 @@ export function updateRule(
   values.push(new Date().toISOString());
   values.push(ruleId);
 
-  db.prepare(`UPDATE kanban_rules SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+  db.prepare(`UPDATE kanban_rules SET ${sets.join(", ")} WHERE id = ?`).run(
+    ...values,
+  );
 
-  return (db.prepare("SELECT * FROM kanban_rules WHERE id = ?").get(ruleId) as Rule | undefined) || null;
+  return (
+    (db.prepare("SELECT * FROM kanban_rules WHERE id = ?").get(ruleId) as
+      | Rule
+      | undefined) || null
+  );
 }
 
 export function deleteRule(ruleId: number): boolean {
-  const result = db.prepare("DELETE FROM kanban_rules WHERE id = ?").run(ruleId);
+  const result = db
+    .prepare("DELETE FROM kanban_rules WHERE id = ?")
+    .run(ruleId);
   return result.changes > 0;
 }
 
 export function getEnabledRulesContent(): string {
   const rules = db
-    .prepare("SELECT content FROM kanban_rules WHERE enabled = 1 ORDER BY position ASC")
+    .prepare(
+      "SELECT content FROM kanban_rules WHERE enabled = 1 ORDER BY position ASC",
+    )
     .all() as { content: string }[];
-  return rules.map(r => r.content).join("\n\n");
+  return rules.map((r) => r.content).join("\n\n");
 }
 
 // ── Settings functions ──────────────────────────────────────────
@@ -992,7 +1089,10 @@ export function getSessionModel(sessionId: string): string | null {
   }
 }
 
-export function getActiveSessionIds(): Array<{ id: string; directory: string }> {
+export function getActiveSessionIds(): Array<{
+  id: string;
+  directory: string;
+}> {
   const oneDayAgoMs = Date.now() - 86400000;
   return db
     .prepare(
@@ -1001,9 +1101,15 @@ export function getActiveSessionIds(): Array<{ id: string; directory: string }> 
     .all(oneDayAgoMs) as Array<{ id: string; directory: string }>;
 }
 
-export function setSessionCompacting(sessionId: string, compacting: boolean): void {
+export function setSessionCompacting(
+  sessionId: string,
+  compacting: boolean,
+): void {
   const value = compacting ? Date.now() : null;
-  db.prepare("UPDATE session SET time_compacting = ? WHERE id = ?").run(value, sessionId);
+  db.prepare("UPDATE session SET time_compacting = ? WHERE id = ?").run(
+    value,
+    sessionId,
+  );
 }
 
 export function isSessionCompacting(sessionId: string): boolean {
@@ -1025,11 +1131,19 @@ export function getDistinctRepos(): string[] {
 }
 
 export function deleteSession(sessionId: string): void {
-  db.prepare("INSERT OR IGNORE INTO kanban_deleted_sessions (session_id) VALUES (?)").run(sessionId);
-  db.prepare("DELETE FROM kanban_completed WHERE session_id = ?").run(sessionId);
-  db.prepare("DELETE FROM kanban_session_columns WHERE session_id = ?").run(sessionId);
+  db.prepare(
+    "INSERT OR IGNORE INTO kanban_deleted_sessions (session_id) VALUES (?)",
+  ).run(sessionId);
+  db.prepare("DELETE FROM kanban_completed WHERE session_id = ?").run(
+    sessionId,
+  );
+  db.prepare("DELETE FROM kanban_session_columns WHERE session_id = ?").run(
+    sessionId,
+  );
   db.prepare("DELETE FROM kanban_subtasks WHERE session_id = ?").run(sessionId);
-  db.prepare("DELETE FROM kanban_agent_logs WHERE session_id = ?").run(sessionId);
+  db.prepare("DELETE FROM kanban_agent_logs WHERE session_id = ?").run(
+    sessionId,
+  );
   emitBoardChange("card_deleted", { session_id: sessionId });
 }
 
@@ -1037,14 +1151,18 @@ export function deleteSession(sessionId: string): void {
 
 export function deriveTaskKeyPrefix(boardName: string): string {
   const parts = boardName
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
     .split(/[-_\s]+/)
     .filter(Boolean);
 
   if (parts.length === 1) {
     return parts[0].substring(0, 2).toUpperCase();
   }
-  return parts.map(p => p[0]).join('').toUpperCase().substring(0, 3);
+  return parts
+    .map((p) => p[0])
+    .join("")
+    .toUpperCase()
+    .substring(0, 3);
 }
 
 export function getNextTaskKey(boardId: number): string {
@@ -1055,17 +1173,19 @@ export function getNextTaskKey(boardId: number): string {
 
   // Atomic increment: INSERT if not exists, then UPDATE
   db.prepare(
-    "INSERT OR IGNORE INTO kanban_task_key_counters (board_id, next_number) VALUES (?, 1)"
+    "INSERT OR IGNORE INTO kanban_task_key_counters (board_id, next_number) VALUES (?, 1)",
   ).run(boardId);
 
   const row = db
-    .prepare("SELECT next_number FROM kanban_task_key_counters WHERE board_id = ?")
+    .prepare(
+      "SELECT next_number FROM kanban_task_key_counters WHERE board_id = ?",
+    )
     .get(boardId) as { next_number: number } | undefined;
 
   const num = row?.next_number || 1;
 
   db.prepare(
-    "UPDATE kanban_task_key_counters SET next_number = ? WHERE board_id = ?"
+    "UPDATE kanban_task_key_counters SET next_number = ? WHERE board_id = ?",
   ).run(num + 1, boardId);
 
   return `${prefix}-${num}`;
@@ -1081,7 +1201,7 @@ export function createEpic(
   const now = new Date().toISOString();
   const result = db
     .prepare(
-      "INSERT INTO kanban_epics (board_id, task_key, title, description, status, planner_session_id, column_name, created_at, updated_at) VALUES (?, ?, ?, ?, 'planning', ?, 'Backlog', ?, ?)"
+      "INSERT INTO kanban_epics (board_id, task_key, title, description, status, planner_session_id, column_name, created_at, updated_at) VALUES (?, ?, ?, ?, 'planning', ?, 'Backlog', ?, ?)",
     )
     .run(boardId, taskKey, title, description, plannerSessionId, now, now);
 
@@ -1092,15 +1212,19 @@ export function createEpic(
     task_key: taskKey,
     title,
     description,
-    plan_text: '',
-    status: 'planning',
+    plan_text: "",
+    status: "planning",
     planner_session_id: plannerSessionId,
-    column_name: 'Backlog',
+    column_name: "Backlog",
     created_at: now,
     updated_at: now,
   };
 
-  emitBoardChange("epic_updated" as any, { epic_id: epicId, board_id: boardId, status: 'planning' });
+  emitBoardChange("epic_updated" as any, {
+    epic_id: epicId,
+    board_id: boardId,
+    status: "planning",
+  });
   return epic;
 }
 
@@ -1123,12 +1247,30 @@ export function updateEpic(
   const sets: string[] = [];
   const values: any[] = [];
 
-  if (data.status !== undefined) { sets.push("status = ?"); values.push(data.status); }
-  if (data.plan_text !== undefined) { sets.push("plan_text = ?"); values.push(data.plan_text); }
-  if (data.column_name !== undefined) { sets.push("column_name = ?"); values.push(data.column_name); }
-  if (data.title !== undefined) { sets.push("title = ?"); values.push(data.title); }
-  if (data.description !== undefined) { sets.push("description = ?"); values.push(data.description); }
-  if (data.planner_session_id !== undefined) { sets.push("planner_session_id = ?"); values.push(data.planner_session_id); }
+  if (data.status !== undefined) {
+    sets.push("status = ?");
+    values.push(data.status);
+  }
+  if (data.plan_text !== undefined) {
+    sets.push("plan_text = ?");
+    values.push(data.plan_text);
+  }
+  if (data.column_name !== undefined) {
+    sets.push("column_name = ?");
+    values.push(data.column_name);
+  }
+  if (data.title !== undefined) {
+    sets.push("title = ?");
+    values.push(data.title);
+  }
+  if (data.description !== undefined) {
+    sets.push("description = ?");
+    values.push(data.description);
+  }
+  if (data.planner_session_id !== undefined) {
+    sets.push("planner_session_id = ?");
+    values.push(data.planner_session_id);
+  }
 
   if (sets.length === 0) return epic;
 
@@ -1136,22 +1278,37 @@ export function updateEpic(
   values.push(new Date().toISOString());
   values.push(epicId);
 
-  db.prepare(`UPDATE kanban_epics SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+  db.prepare(`UPDATE kanban_epics SET ${sets.join(", ")} WHERE id = ?`).run(
+    ...values,
+  );
 
-  const updated = (db.prepare("SELECT * FROM kanban_epics WHERE id = ?").get(epicId) as Epic | undefined) || null;
+  const updated =
+    (db.prepare("SELECT * FROM kanban_epics WHERE id = ?").get(epicId) as
+      | Epic
+      | undefined) || null;
   if (updated) {
-    emitBoardChange("epic_updated" as any, { epic_id: updated.id, board_id: updated.board_id, status: updated.status });
+    emitBoardChange("epic_updated" as any, {
+      epic_id: updated.id,
+      board_id: updated.board_id,
+      status: updated.status,
+    });
   }
   return updated;
 }
 
 export function getEpic(epicId: number): Epic | null {
-  return (db.prepare("SELECT * FROM kanban_epics WHERE id = ?").get(epicId) as Epic | undefined) || null;
+  return (
+    (db.prepare("SELECT * FROM kanban_epics WHERE id = ?").get(epicId) as
+      | Epic
+      | undefined) || null
+  );
 }
 
 export function getEpicsByBoard(boardId: number): Epic[] {
   return db
-    .prepare("SELECT * FROM kanban_epics WHERE board_id = ? ORDER BY created_at ASC")
+    .prepare(
+      "SELECT * FROM kanban_epics WHERE board_id = ? ORDER BY created_at ASC",
+    )
     .all(boardId) as Epic[];
 }
 
@@ -1161,7 +1318,7 @@ export function deleteEpic(epicId: number): void {
 
   // Get child session IDs before deleting
   const sessions = getEpicSessions(epicId);
-  const childSessionIds = sessions.map(s => s.session_id);
+  const childSessionIds = sessions.map((s) => s.session_id);
 
   // Delete epic sessions first (FK cascade should handle this, but be explicit)
   db.prepare("DELETE FROM kanban_epic_sessions WHERE epic_id = ?").run(epicId);
@@ -1170,19 +1327,33 @@ export function deleteEpic(epicId: number): void {
 
   // Clean up kanban tracking for child sessions
   for (const sid of childSessionIds) {
-    db.prepare("INSERT OR IGNORE INTO kanban_deleted_sessions (session_id) VALUES (?)").run(sid);
+    db.prepare(
+      "INSERT OR IGNORE INTO kanban_deleted_sessions (session_id) VALUES (?)",
+    ).run(sid);
     db.prepare("DELETE FROM kanban_completed WHERE session_id = ?").run(sid);
-    db.prepare("DELETE FROM kanban_session_columns WHERE session_id = ?").run(sid);
+    db.prepare("DELETE FROM kanban_session_columns WHERE session_id = ?").run(
+      sid,
+    );
   }
 
   // Also clean up planner session
   if (epic.planner_session_id) {
-    db.prepare("INSERT OR IGNORE INTO kanban_deleted_sessions (session_id) VALUES (?)").run(epic.planner_session_id);
-    db.prepare("DELETE FROM kanban_completed WHERE session_id = ?").run(epic.planner_session_id);
-    db.prepare("DELETE FROM kanban_session_columns WHERE session_id = ?").run(epic.planner_session_id);
+    db.prepare(
+      "INSERT OR IGNORE INTO kanban_deleted_sessions (session_id) VALUES (?)",
+    ).run(epic.planner_session_id);
+    db.prepare("DELETE FROM kanban_completed WHERE session_id = ?").run(
+      epic.planner_session_id,
+    );
+    db.prepare("DELETE FROM kanban_session_columns WHERE session_id = ?").run(
+      epic.planner_session_id,
+    );
   }
 
-  emitBoardChange("epic_updated" as any, { epic_id: epicId, board_id: epic.board_id, status: 'deleted' });
+  emitBoardChange("epic_updated" as any, {
+    epic_id: epicId,
+    board_id: epic.board_id,
+    status: "deleted",
+  });
 }
 
 export function addEpicSession(
@@ -1195,7 +1366,7 @@ export function addEpicSession(
 ): EpicSession {
   const result = db
     .prepare(
-      "INSERT INTO kanban_epic_sessions (epic_id, session_id, task_key, subtask_index, title, description) VALUES (?, ?, ?, ?, ?, ?)"
+      "INSERT INTO kanban_epic_sessions (epic_id, session_id, task_key, subtask_index, title, description) VALUES (?, ?, ?, ?, ?, ?)",
     )
     .run(epicId, sessionId, taskKey, subtaskIndex, title, description);
 
@@ -1212,14 +1383,20 @@ export function addEpicSession(
 
   const epic = getEpic(epicId);
   if (epic) {
-    emitBoardChange("epic_updated" as any, { epic_id: epicId, board_id: epic.board_id, status: epic.status });
+    emitBoardChange("epic_updated" as any, {
+      epic_id: epicId,
+      board_id: epic.board_id,
+      status: epic.status,
+    });
   }
   return epicSession;
 }
 
 export function getEpicSessions(epicId: number): EpicSession[] {
   return db
-    .prepare("SELECT * FROM kanban_epic_sessions WHERE epic_id = ? ORDER BY subtask_index ASC")
+    .prepare(
+      "SELECT * FROM kanban_epic_sessions WHERE epic_id = ? ORDER BY subtask_index ASC",
+    )
     .all(epicId) as EpicSession[];
 }
 
@@ -1240,12 +1417,15 @@ export function updateEpicStatus(epicId: number): void {
 
   // Get completed set to check if child sessions are done
   const completedSet = new Set(
-    (db.prepare("SELECT session_id FROM kanban_completed").all() as { session_id: string }[])
-      .map(r => r.session_id)
+    (
+      db.prepare("SELECT session_id FROM kanban_completed").all() as {
+        session_id: string;
+      }[]
+    ).map((r) => r.session_id),
   );
 
-  const allCompleted = sessions.every(s => completedSet.has(s.session_id));
-  const anyFailed = sessions.some(s => {
+  const allCompleted = sessions.every((s) => completedSet.has(s.session_id));
+  const anyFailed = sessions.some((s) => {
     // Check if session is in a failed state — we consider it failed if it was deleted or if status indicates failure
     // For now, we check if it's completed (not failed). Real failure detection would need opencode status.
     return false; // Will be enhanced with opencode status checks
@@ -1255,8 +1435,8 @@ export function updateEpicStatus(epicId: number): void {
   let newColumn: string = epic.column_name;
 
   if (allCompleted) {
-    newStatus = 'completed';
-    newColumn = 'Done';
+    newStatus = "completed";
+    newColumn = "Done";
   }
 
   if (newStatus !== epic.status || newColumn !== epic.column_name) {
@@ -1287,4 +1467,57 @@ export function isKeepImportant(): boolean {
 
 export function closeDb(): void {
   db.close();
+}
+
+// ── GitHub config helpers ──────────────────────────────────────
+
+export interface GitHubConfigRow {
+  board_id: number;
+  github_token: string;
+  selected_repos: string; // JSON array string
+  created_at: string;
+  updated_at: string;
+}
+
+export function getGitHubConfig(boardId: number): GitHubConfigRow | undefined {
+  return db
+    .prepare("SELECT * FROM kanban_github_configs WHERE board_id = ?")
+    .get(boardId) as GitHubConfigRow | undefined;
+}
+
+export function saveGitHubConfig(
+  boardId: number,
+  token: string,
+  selectedRepos: string[],
+): void {
+  const reposJson = JSON.stringify(selectedRepos);
+  db.prepare(
+    `
+    INSERT INTO kanban_github_configs (board_id, github_token, selected_repos)
+    VALUES (?, ?, ?)
+    ON CONFLICT(board_id) DO UPDATE SET
+      github_token = excluded.github_token,
+      updated_at = datetime('now')
+  `,
+  ).run(boardId, token, reposJson);
+}
+
+export function updateGitHubSelectedRepos(
+  boardId: number,
+  selectedRepos: string[],
+): void {
+  const reposJson = JSON.stringify(selectedRepos);
+  db.prepare(
+    `
+    UPDATE kanban_github_configs
+    SET selected_repos = ?, updated_at = datetime('now')
+    WHERE board_id = ?
+  `,
+  ).run(reposJson, boardId);
+}
+
+export function deleteGitHubConfig(boardId: number): void {
+  db.prepare("DELETE FROM kanban_github_configs WHERE board_id = ?").run(
+    boardId,
+  );
 }

@@ -143,3 +143,13 @@ CREATE INDEX IF NOT EXISTS idx_epics_planner ON kanban_epics(planner_session_id)
 CREATE INDEX IF NOT EXISTS idx_epic_sessions_epic ON kanban_epic_sessions(epic_id);
 CREATE INDEX IF NOT EXISTS idx_epic_sessions_session ON kanban_epic_sessions(session_id);
 CREATE INDEX IF NOT EXISTS idx_task_key_counters_board ON kanban_task_key_counters(board_id);
+
+-- GitHub integration — per-board GitHub token and selected repos
+CREATE TABLE IF NOT EXISTS kanban_github_configs (
+  board_id INTEGER PRIMARY KEY REFERENCES kanban_boards(id) ON DELETE CASCADE,
+  github_token TEXT NOT NULL,
+  selected_repos TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_github_configs_board ON kanban_github_configs(board_id);
