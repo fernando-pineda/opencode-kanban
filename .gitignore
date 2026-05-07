@@ -5,5 +5,7 @@ kanban.db-wal
 logs/
 build/
 dist/
+web/dist/
 .DS_Store
 scripts/start-web.sh
+*.plist

@@ -27,34 +27,42 @@ interface WorkspacePickerProps {
 
 const API_BASE = "";
 
-// Start from home directory
-const HOME = "/Users/fernando";
-
 export default function WorkspacePicker({
   open,
   onOpenChange,
   onSelect,
 }: WorkspacePickerProps) {
-  const [currentPath, setCurrentPath] = useState(HOME);
+  const [homeDir, setHomeDir] = useState("/");
+  const [currentPath, setCurrentPath] = useState("/");
   const [entries, setEntries] = useState<DirEntry[]>([]);
   const [loading, setLoading] = useState(false);
-  const [history, setHistory] = useState<string[]>([HOME]);
+  const [history, setHistory] = useState<string[]>(["/"]);
   const [historyIndex, setHistoryIndex] = useState(0);
   const [search, setSearch] = useState("");
   const prevOpen = useRef(open);
 
+  // Fetch home directory on mount
+  useEffect(() => {
+    fetch(`${API_BASE}/api/home`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.home) setHomeDir(d.home);
+      })
+      .catch(() => {});
+  }, []);
+
   // Reset state when dialog closes
   useEffect(() => {
     if (prevOpen.current && !open) {
-      setCurrentPath(HOME);
+      setCurrentPath(homeDir);
       setEntries([]);
       setLoading(false);
-      setHistory([HOME]);
+      setHistory([homeDir]);
       setHistoryIndex(0);
       setSearch("");
     }
     prevOpen.current = open;
-  }, [open]);
+  }, [open, homeDir]);
 
   const fetchDir = useCallback(async (dirPath: string) => {
     setLoading(true);
@@ -76,12 +84,12 @@ export default function WorkspacePicker({
     }
   }, []);
 
-  // Fetch on open
+  // Fetch on open — browse to home directory
   useEffect(() => {
     if (open) {
-      fetchDir(currentPath);
+      fetchDir(currentPath === "/" && homeDir !== "/" ? homeDir : currentPath);
     }
-  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, homeDir]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const navigateTo = (dirPath: string) => {
     const newHistory = history.slice(0, historyIndex + 1);
@@ -119,7 +127,9 @@ export default function WorkspacePicker({
     onOpenChange(false);
   };
 
-  const displayPath = currentPath.replace(/^\/Users\/[^/]+/, "~");
+  const displayPath = homeDir !== "/"
+    ? currentPath.replace(new RegExp(`^${homeDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`), "~")
+    : currentPath;
 
   const filtered = useMemo(() => {
     if (!search.trim()) return entries;

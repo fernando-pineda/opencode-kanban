@@ -1636,6 +1636,11 @@ app.get("/api/events", (req: Request, res: Response) => {
   });
 });
 
+// Home directory for workspace picker
+app.get("/api/home", (_req: Request, res: Response) => {
+  res.json({ home: os.homedir() });
+});
+
 // Filesystem browsing for workspace picker
 app.get("/api/filesystem", (req: Request, res: Response) => {
   try {
