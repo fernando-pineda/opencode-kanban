@@ -188,7 +188,7 @@ async function restartOpencodeServe() {
                         // Process is dead, restart it
                     }
                     // Restart opencode serve in the background
-                    const child = exec("nohup opencode serve > /dev/null 2>&1 &", { cwd }, (restartErr) => {
+                    const child = exec("nohup opencode serve > /dev/null 2>&1 &", { cwd, env: process.env }, (restartErr) => {
                         if (restartErr) {
                             resolve({ restarted: false, error: `Restart failed: ${restartErr.message}` });
                             return;
