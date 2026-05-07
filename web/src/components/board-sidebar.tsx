@@ -33,6 +33,7 @@ import {
   SidebarFooter,
 } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Tooltip,
   TooltipContent,
@@ -102,11 +103,11 @@ function SortableBoardItem({
             tooltip={board.name}
           >
             <span
-              className="relative flex items-center justify-center w-5 h-5 rounded bg-foreground text-background text-xs font-bold flex-shrink-0 cursor-grab active:cursor-grabbing"
+              className={`relative flex items-center justify-center w-5 h-5 rounded text-xs font-bold flex-shrink-0 cursor-grab active:cursor-grabbing ${board.has_busy ? 'bg-blue-500 text-white' : 'bg-foreground text-background'}`}
               {...attributes}
               {...listeners}
             >
-              {board.name.charAt(0).toUpperCase()}
+              {board.has_busy ? <Spinner className="size-3.5" /> : board.name.charAt(0).toUpperCase()}
             </span>
             <span className="flex-1 min-w-0 group-data-[collapsible=icon]:hidden">
               <div className="font-medium truncate flex items-center gap-2">

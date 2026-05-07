@@ -41,6 +41,7 @@ import {
   X,
   Eye,
   Search,
+  LayoutList,
 } from 'lucide-react'
 import type {
   GitHubConfig,
@@ -48,6 +49,8 @@ import type {
   GitHubIssue,
   GitHubLabel,
   GitHubUser,
+  GitHubProject,
+  GitHubProjectItem,
 } from '../types'
 
 // ── Props ────────────────────────────────────────────────────────
@@ -111,6 +114,47 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
 
   // Issue detail state
   const [detailIssue, setDetailIssue] = useState<GitHubIssue | null>(null)
+
+  // Tab state
+  const [activeMainTab, setActiveMainTab] = useState('issues')
+
+  // Projects state
+  const [projects, setProjects] = useState<GitHubProject[]>([])
+  const [loadingProjects, setLoadingProjects] = useState(false)
+  const [selectedProject, setSelectedProject] = useState<GitHubProject | null>(null)
+  const [projectItems, setProjectItems] = useState<GitHubProjectItem[]>([])
+  const [loadingProjectItems, setLoadingProjectItems] = useState(false)
+  const [detailProjectItem, setDetailProjectItem] = useState<GitHubProjectItem | null>(null)
+
+  // ── Reset on board change ────────────────────────────────────────
+  useEffect(() => {
+    setConfig(null)
+    setLoadingConfig(false)
+    setTokenInput('')
+    setSaving(false)
+    setSetupError(null)
+    setRepos([])
+    setSelectedRepos([])
+    setLoadingRepos(false)
+    setShowRepoPicker(false)
+    setRepoFilter('')
+    setIssuesByRepo({})
+    setLoadingIssues(false)
+    setActiveRepoTab('')
+    setIssuesFilter('')
+    setSpawnDialogOpen(false)
+    setSpawnIssue(null)
+    setSpawnAgent('')
+    setSpawning(false)
+    setDetailIssue(null)
+    setActiveMainTab('issues')
+    setProjects([])
+    setLoadingProjects(false)
+    setSelectedProject(null)
+    setProjectItems([])
+    setLoadingProjectItems(false)
+    setDetailProjectItem(null)
+  }, [boardId])
 
   // ── Fetch config ───────────────────────────────────────────────
 
@@ -281,10 +325,58 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
       setIssuesByRepo({})
       setShowRepoPicker(false)
       setActiveRepoTab('')
+      setProjects([])
+      setSelectedProject(null)
+      setProjectItems([])
+      setDetailProjectItem(null)
+      setActiveMainTab('issues')
     } catch {
       // ignore
     }
   }
+
+  // ── Fetch projects ──────────────────────────────────────────────
+
+  const fetchProjects = useCallback(async () => {
+    if (!config?.has_token) return
+    setLoadingProjects(true)
+    try {
+      const res = await fetch(`/api/boards/${boardId}/github/projects`)
+      if (res.ok) {
+        const data = await res.json()
+        setProjects(data.projects || [])
+      }
+    } catch {
+      // ignore
+    } finally {
+      setLoadingProjects(false)
+    }
+  }, [boardId, config?.has_token])
+
+  const fetchProjectItems = useCallback(async (projectId: string) => {
+    setLoadingProjectItems(true)
+    try {
+      const res = await fetch(`/api/boards/${boardId}/github/projects/${projectId}/items`)
+      if (res.ok) {
+        const data = await res.json()
+        setProjectItems(data.items || [])
+      }
+    } catch {
+      // ignore
+    } finally {
+      setLoadingProjectItems(false)
+    }
+  }, [boardId])
+
+  useEffect(() => {
+    if (open && config?.has_token && activeMainTab === 'projects') {
+      if (selectedProject) {
+        fetchProjectItems(selectedProject.id)
+      } else {
+        fetchProjects()
+      }
+    }
+  }, [open, config?.has_token, activeMainTab, selectedProject, fetchProjects, fetchProjectItems])
 
   // ── Toggle repo selection ──────────────────────────────────────
 
@@ -331,6 +423,24 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
     overscan: 10,
   })
 
+  // Virtualizer: projects list
+  const projectScrollRef = useRef<HTMLDivElement>(null)
+  const projectVirtualizer = useVirtualizer({
+    count: projects.length,
+    getScrollElement: () => projectScrollRef.current,
+    estimateSize: () => 48,
+    overscan: 10,
+  })
+
+  // Virtualizer: project items list
+  const projectItemScrollRef = useRef<HTMLDivElement>(null)
+  const projectItemVirtualizer = useVirtualizer({
+    count: projectItems.length,
+    getScrollElement: () => projectItemScrollRef.current,
+    estimateSize: () => 48,
+    overscan: 10,
+  })
+
   // ── Render ─────────────────────────────────────────────────────
 
   return (
@@ -344,6 +454,22 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
             </div>
           </SheetHeader>
 
+          {/* Main tabs: Issues | Projects */}
+          {config?.has_token && !showRepoPicker && !loadingConfig && (
+            <div className="border-b px-6">
+              <Tabs value={activeMainTab} onValueChange={setActiveMainTab}>
+                <TabsList variant="line">
+                  <TabsTrigger value="issues" className="text-xs">
+                    Issues
+                  </TabsTrigger>
+                  <TabsTrigger value="projects" className="text-xs">
+                    Projects
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
+            </div>
+          )}
+
           <div className="flex-1 overflow-hidden">
             {/* ── Setup Mode ──────────────────────────────────── */}
             {loadingConfig ? (
@@ -356,9 +482,26 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
                 <div className="space-y-2">
                   <h3 className="text-sm font-medium">Connect GitHub</h3>
                   <p className="text-xs text-muted-foreground">
-                    Enter a GitHub Personal Access Token with repo access.
+                    Enter a GitHub Personal Access Token (classic).
                     The token is stored locally for this board only.
                   </p>
+                  <div className="rounded-lg border bg-muted/30 p-3 space-y-1.5">
+                    <p className="text-xs font-medium">Required scopes:</p>
+                    <ul className="text-xs text-muted-foreground space-y-0.5 list-none">
+                      <li><code className="text-[11px] bg-muted px-1 py-0.5 rounded">repo</code> — Access to issues and pull requests</li>
+                      <li><code className="text-[11px] bg-muted px-1 py-0.5 rounded">project</code> — Access to GitHub Projects (v2)</li>
+                      <li><code className="text-[11px] bg-muted px-1 py-0.5 rounded">read:org</code> — List organization projects <span className="text-muted-foreground/60">(optional)</span></li>
+                    </ul>
+                    <a
+                      href="https://github.com/settings/tokens/new"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-primary hover:underline inline-flex items-center gap-1"
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                      Create a token
+                    </a>
+                  </div>
                 </div>
                 <div className="space-y-2">
                   <Input
@@ -498,7 +641,7 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
                   </div>
                 </div>
               </div>
-            ) : detailIssue ? (
+            ) : activeMainTab === 'issues' && detailIssue ? (
               /* ── Issue Detail ─────────────────────────────────── */
               <div className="flex flex-col h-full">
                 <div className="px-6 pt-4 pb-3 border-b">
@@ -575,7 +718,7 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
                   </Button>
                 </div>
               </div>
-            ) : (
+            ) : activeMainTab === 'issues' ? (
               /* ── Issues View ─────────────────────────────────── */
               <div className="flex flex-col h-full">
                 {/* Repo Tabs */}
@@ -726,6 +869,183 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
                     </div>
                   )}
                 </div>
+              </div>
+            ) : null}
+            {activeMainTab === 'projects' && config?.has_token && !showRepoPicker && (
+              /* ── Projects View ────────────────────────────────── */
+              <div className="flex flex-col h-full">
+                {detailProjectItem ? (
+                  /* ── Project Item Detail ─────────────────────── */
+                  <div className="flex flex-col h-full">
+                    <div className="px-6 pt-4 pb-3 border-b">
+                      <Button variant="ghost" size="sm" onClick={() => setDetailProjectItem(null)} className="h-7 px-2 text-xs">
+                        ← Back
+                      </Button>
+                      <h2 className="text-base font-semibold mt-2">{detailProjectItem.title}</h2>
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
+                        {detailProjectItem.status && (
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0">{detailProjectItem.status}</Badge>
+                        )}
+                        {detailProjectItem.type && (
+                          <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{detailProjectItem.type === 'PULL_REQUEST' ? 'PR' : detailProjectItem.type}</Badge>
+                        )}
+                        {detailProjectItem.state && (
+                          <Badge variant={detailProjectItem.state === 'open' ? 'default' : 'secondary'} className="text-[10px] px-1.5 py-0">{detailProjectItem.state}</Badge>
+                        )}
+                        {detailProjectItem.repository && (
+                          <span className="text-xs text-muted-foreground">{detailProjectItem.repository}</span>
+                        )}
+                        {detailProjectItem.labels.map(label => (
+                          <Badge key={label.id} className="text-[10px] px-1.5 py-0 border-0" style={{ backgroundColor: `#${label.color}20`, color: `#${label.color}` }}>{label.name}</Badge>
+                        ))}
+                      </div>
+                      {detailProjectItem.assignees.length > 0 && (
+                        <div className="flex items-center gap-1 mt-2">
+                          <span className="text-xs text-muted-foreground">Assignees:</span>
+                          {detailProjectItem.assignees.map(a => (
+                            <Badge key={a.login} variant="outline" className="text-[10px] px-1.5 py-0">{a.login}</Badge>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex-1 overflow-y-auto px-6 py-4">
+                      {detailProjectItem.body ? (
+                        <div className="text-sm whitespace-pre-wrap break-words leading-relaxed text-muted-foreground">{detailProjectItem.body}</div>
+                      ) : (
+                        <p className="text-sm text-muted-foreground italic">No description provided.</p>
+                      )}
+                    </div>
+                    <div className="border-t px-6 py-4 flex items-center gap-2">
+                      {detailProjectItem.html_url && (
+                        <Button variant="outline" onClick={() => window.open(detailProjectItem.html_url!, '_blank')} className="text-xs">
+                          <ExternalLink className="h-3 w-3 mr-1" />
+                          {detailProjectItem.type === 'PULL_REQUEST' ? 'Open PR' : 'Open Issue'}
+                        </Button>
+                      )}
+                      <div className="flex-1" />
+                      <Button variant="default" onClick={() => {
+                        setSpawnIssue({
+                          id: 0,
+                          number: detailProjectItem.number || 0,
+                          title: detailProjectItem.title,
+                          body: detailProjectItem.body,
+                          state: (detailProjectItem.state as 'open' | 'closed') || 'open',
+                          html_url: detailProjectItem.html_url || '',
+                          labels: detailProjectItem.labels,
+                          assignees: detailProjectItem.assignees,
+                          user: detailProjectItem.assignees[0] || { login: '', avatar_url: '', html_url: '' },
+                          comments: 0,
+                          created_at: detailProjectItem.created_at,
+                          updated_at: detailProjectItem.updated_at,
+                          repository_url: detailProjectItem.repository ? `https://api.github.com/repos/${detailProjectItem.repository}` : '',
+                        })
+                        setSpawnDialogOpen(true)
+                      }} className="text-xs">
+                        <Rocket className="h-3 w-3 mr-1" />
+                        Spawn Agent
+                      </Button>
+                    </div>
+                  </div>
+                ) : selectedProject ? (
+                  /* ── Project Items ──────────────────────────── */
+                  <div className="flex flex-col h-full">
+                    <div className="border-b px-6 py-3">
+                      <div className="flex items-center gap-2">
+                        <Button variant="ghost" size="sm" onClick={() => { setSelectedProject(null); setProjectItems([]) }} className="h-7 px-2 text-xs">
+                          ← Back
+                        </Button>
+                        <h3 className="text-sm font-medium">{selectedProject.title}</h3>
+                        <span className="text-xs text-muted-foreground">{projectItems.length} items</span>
+                      </div>
+                    </div>
+                    {/* Table header */}
+                    <div className="px-4 py-2 border-b bg-muted/30">
+                      <div className="grid grid-cols-[1fr_100px_100px_100px] gap-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                        <span>Title</span>
+                        <span>Status</span>
+                        <span>Type</span>
+                        <span>Updated</span>
+                      </div>
+                    </div>
+                    <div ref={projectItemScrollRef} className="flex-1 overflow-y-auto">
+                      {loadingProjectItems ? (
+                        <div className="p-4 space-y-2">
+                          {Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-12"><Skeleton className="h-8 w-full" /></div>)}
+                        </div>
+                      ) : projectItems.length === 0 ? (
+                        <div className="text-center py-8 text-muted-foreground text-sm">No items in this project</div>
+                      ) : (
+                        <div style={{ height: `${projectItemVirtualizer.getTotalSize()}px`, width: '100%', position: 'relative' }}>
+                          {projectItemVirtualizer.getVirtualItems().map((virtualRow) => {
+                            const item = projectItems[virtualRow.index]
+                            if (!item) return null
+                            return (
+                              <div
+                                key={item.id}
+                                style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: `${virtualRow.size}px`, transform: `translateY(${virtualRow.start}px)` }}
+                                className="grid grid-cols-[1fr_100px_100px_100px] gap-4 items-center px-4 hover:bg-accent/50 transition-colors border-b border-border/50 cursor-pointer"
+                                onClick={() => setDetailProjectItem(item)}
+                              >
+                                <div className="min-w-0 flex items-center gap-2">
+                                  <span className="text-sm truncate">{item.title || 'Untitled'}</span>
+                                  {item.repository && <span className="text-[10px] text-muted-foreground shrink-0">{item.repository}</span>}
+                                </div>
+                                <span className="text-xs truncate">{item.status || '—'}</span>
+                                <Badge variant="secondary" className="text-[10px] px-1.5 py-0 w-fit">{item.type === 'PULL_REQUEST' ? 'PR' : item.type === 'DRAFT_ISSUE' ? 'Draft' : 'Issue'}</Badge>
+                                <span className="text-xs text-muted-foreground truncate">{formatTimeAgo(item.updated_at)}</span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  /* ── Projects List ──────────────────────────── */
+                  <div className="flex flex-col h-full">
+                    <div className="px-4 py-2 border-b bg-muted/30">
+                      <div className="grid grid-cols-[1fr_80px_80px] gap-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                        <span>Project</span>
+                        <span className="text-center">Visibility</span>
+                        <span>Updated</span>
+                      </div>
+                    </div>
+                    <div ref={projectScrollRef} className="flex-1 overflow-y-auto">
+                      {loadingProjects ? (
+                        <div className="p-4 space-y-2">
+                          {Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-12"><Skeleton className="h-8 w-full" /></div>)}
+                        </div>
+                      ) : projects.length === 0 ? (
+                        <div className="text-center py-8 text-muted-foreground text-sm">No projects found</div>
+                      ) : (
+                        <div style={{ height: `${projectVirtualizer.getTotalSize()}px`, width: '100%', position: 'relative' }}>
+                          {projectVirtualizer.getVirtualItems().map((virtualRow) => {
+                            const project = projects[virtualRow.index]
+                            if (!project) return null
+                            return (
+                              <div
+                                key={project.id}
+                                style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: `${virtualRow.size}px`, transform: `translateY(${virtualRow.start}px)` }}
+                                className="grid grid-cols-[1fr_80px_80px] gap-4 items-center px-4 hover:bg-accent/50 transition-colors border-b border-border/50 cursor-pointer"
+                                onClick={() => setSelectedProject(project)}
+                              >
+                                <div className="min-w-0 flex items-center gap-2">
+                                  <LayoutList className="h-4 w-4 text-muted-foreground shrink-0" />
+                                  <div className="min-w-0">
+                                    <span className="text-sm font-medium truncate block">{project.title}</span>
+                                    {project.short_description && <span className="text-xs text-muted-foreground truncate block">{project.short_description}</span>}
+                                  </div>
+                                </div>
+                                <span className="text-xs text-muted-foreground text-center">{project.public ? 'Public' : 'Private'}</span>
+                                <span className="text-xs text-muted-foreground truncate">{formatTimeAgo(project.updated_at)}</span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>

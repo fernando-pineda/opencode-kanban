@@ -4,6 +4,7 @@ export interface Board {
   repo_path: string;
   status: "active" | "archived";
   position: number;
+  has_busy?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -167,4 +168,34 @@ export interface GitHubIssue {
   updated_at: string;
   repository_url: string;
   pull_request?: { url: string };
+}
+
+export interface GitHubProject {
+  id: string;
+  number: number;
+  title: string;
+  short_description: string | null;
+  public: boolean;
+  closed: boolean;
+  created_at: string;
+  updated_at: string;
+  url: string;
+  owner: string;
+  items_count: number;
+}
+
+export interface GitHubProjectItem {
+  id: string;
+  type: "ISSUE" | "PULL_REQUEST" | "DRAFT_ISSUE";
+  title: string;
+  body: string | null;
+  state: string | null;
+  html_url: string | null;
+  number: number | null;
+  repository: string | null;
+  labels: GitHubLabel[];
+  assignees: GitHubUser[];
+  created_at: string;
+  updated_at: string;
+  status: string;
 }

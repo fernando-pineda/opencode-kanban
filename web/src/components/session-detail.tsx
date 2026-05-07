@@ -1327,9 +1327,7 @@ const FileMentionDropdown = memo(function FileMentionDropdown({
 
   // Close on Escape is handled by parent
   if (!directory) return null;
-  // Don't render during initial load to avoid flash of "No files found"
-  if (loading && files.length === 0) return null;
-  if (!loading && files.length === 0) return null;
+  // Don't render if no directory
 
   return (
     <div className="absolute bottom-full left-0 right-0 mb-1 max-h-52 overflow-hidden rounded-md border border-muted bg-popover shadow-lg z-50">
@@ -2989,7 +2987,7 @@ export default function SessionDetail({
                         children={children}
                         onViewChild={handleViewChild}
                         sessionId={activeChildId || sessionId || ""}
-                        directory={data?.directory ?? null}
+directory={data?.directory ?? newSessionDirectory ?? null}
                         isBusy={isBusy}
                         isLastAssistant={msg.role === "assistant" && isLast}
                         onAnswerSubmitted={() => {
@@ -3051,13 +3049,13 @@ export default function SessionDetail({
               sessionId={sessionId}
               onClose={() => onOpenChange(false)}
               data={data}
-              directory={data?.directory ?? null}
-            />
-          )}
-        </div>
-      </div>
+              directory={data?.directory ?? newSessionDirectory ?? null}
+             />
+           )}
+         </div>
+       </div>
 
-      {/* Delete confirmation dialog */}
+       {/* Delete confirmation dialog */}
       {confirmDelete &&
         ReactDOM.createPortal(
           <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50">

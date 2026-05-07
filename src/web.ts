@@ -197,6 +197,8 @@ import {
   listGitHubIssues,
   getGitHubIssue,
   parseRepoFullName,
+  listGitHubProjects,
+  listGitHubProjectItems,
 } from "./github.js";
 import {
   searchMemories,
@@ -901,6 +903,9 @@ app.get("/api/boards/:id", async (req: Request, res: Response) => {
       // Status fetch is non-critical; cards default to is_busy = undefined
     }
 
+    // Propagate has_busy to the board for sidebar indicator
+    boardFull.board.has_busy = boardFull.cards.some(c => c.is_busy === true);
+
     res.json(boardFull);
   } catch (error) {
     res.status(400).json({ error: (error as Error).message });
@@ -1151,6 +1156,41 @@ app.post("/api/boards/:id/github/spawn", async (req: Request, res: Response) => 
     emitBoardChange("card_created", { session_id: session.id, board_id: boardId });
     res.json({ session_id: session.id, title: session.title });
   } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// ── GitHub Projects ────────────────────────────────────────────
+
+app.get("/api/boards/:id/github/projects", async (req: Request, res: Response) => {
+  try {
+    const boardId = parseInt(req.params.id);
+    const config = getGitHubConfig(boardId);
+    if (!config) {
+       res.json({ projects: [] });
+       return;
+    }
+    const projects = await listGitHubProjects(config.github_token);
+    res.json({ projects });
+  } catch (error) {
+    console.error("[github] Failed to fetch projects:", error);
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+app.get("/api/boards/:id/github/projects/:projectId/items", async (req: Request, res: Response) => {
+  try {
+    const boardId = parseInt(req.params.id);
+    const { projectId } = req.params;
+    const config = getGitHubConfig(boardId);
+    if (!config) {
+       res.json({ items: [] });
+       return;
+    }
+    const items = await listGitHubProjectItems(config.github_token, projectId);
+    res.json({ items });
+  } catch (error) {
+    console.error("[github] Failed to fetch project items:", error);
     res.status(500).json({ error: (error as Error).message });
   }
 });

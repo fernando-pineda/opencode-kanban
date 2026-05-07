@@ -26,12 +26,18 @@ export function useKanban(): UseKanbanReturn {
   const [reconnectCounter, setReconnectCounter] = useState(0)
   const eventSourceRef = useRef<EventSource | null>(null)
 
-  // Fetch all boards
+  // Fetch all boards (preserves has_busy from current state since the list API doesn't include it)
   const fetchBoards = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/api/boards`)
       const data = await res.json()
-      setBoards(data)
+      setBoards(prev => {
+        const busyMap = new Map(prev.map(b => [b.id, b.has_busy]))
+        return data.map((b: Board) => ({
+          ...b,
+          has_busy: busyMap.get(b.id) ?? b.has_busy,
+        }))
+      })
     } catch (err) {
       console.error('Failed to fetch boards:', err)
     }
@@ -43,6 +49,10 @@ export function useKanban(): UseKanbanReturn {
       const res = await fetch(`${API_BASE}/api/boards/${boardId}`)
       const data = await res.json()
       setActiveBoard(data)
+      // Propagate has_busy to boards list for sidebar spinner indicator
+      if (data.board) {
+        setBoards(prev => prev.map(b => b.id === data.board.id ? { ...b, has_busy: data.board.has_busy } : b))
+      }
     } catch (err) {
       console.error('Failed to fetch board:', err)
     }

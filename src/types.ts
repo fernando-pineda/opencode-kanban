@@ -4,6 +4,7 @@ export interface Board {
   repo_path: string;
   status: "active" | "archived";
   position: number;
+  has_busy?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -282,4 +283,34 @@ export interface GitHubIssue {
   updated_at: string;
   repository_url: string; // "https://api.github.com/repos/owner/repo"
   pull_request?: { url: string }; // present if issue is actually a PR
+}
+
+export interface GitHubProject {
+  id: string;           // GraphQL node ID
+  number: number;       // project number
+  title: string;
+  short_description: string | null;
+  public: boolean;
+  closed: boolean;
+  created_at: string;
+  updated_at: string;
+  url: string;          // web URL
+  owner: string;        // org or user login
+  items_count: number;
+}
+
+export interface GitHubProjectItem {
+  id: string;           // GraphQL node ID
+  type: "ISSUE" | "PULL_REQUEST" | "DRAFT_ISSUE";
+  title: string;
+  body: string | null;
+  state: string | null; // issue/PR state
+  html_url: string | null;
+  number: number | null;
+  repository: string | null; // "owner/repo"
+  labels: GitHubLabel[];
+  assignees: GitHubUser[];
+  created_at: string;
+  updated_at: string;
+  status: string;       // project item status field value
 }

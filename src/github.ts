@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import type { GitHubRepo, GitHubIssue, GitHubUser } from "./types.js";
+import type { GitHubRepo, GitHubIssue, GitHubUser, GitHubProject, GitHubProjectItem, GitHubLabel } from "./types.js";
 
 const GITHUB_API = "https://api.github.com";
 
@@ -193,4 +193,314 @@ export async function getGitHubIssue(
 export function parseRepoFullName(fullName: string): { owner: string; repo: string } {
   const parts = fullName.split("/");
   return { owner: parts[0], repo: parts[1] };
+}
+
+/**
+ * GraphQL API helper for GitHub
+ */
+async function githubGraphQL<T = Record<string, unknown>>(
+  query: string,
+  variables: Record<string, unknown>,
+  token: string
+): Promise<T> {
+  const res = await fetch("https://api.github.com/graphql", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ query, variables }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`GitHub GraphQL error ${res.status}: ${res.statusText} — ${body}`);
+  }
+  const data = (await res.json()) as { data: T; errors?: Array<{ message: string }> };
+  if (data.errors && data.errors.length > 0) {
+    throw new Error(`GitHub GraphQL error: ${data.errors.map((e) => e.message).join(", ")}`);
+  }
+  return data.data;
+}
+
+/**
+ * List GitHub Projects (v2) for the authenticated user or an org.
+ * Uses the GraphQL API.
+ */
+export async function listGitHubProjects(
+  token: string,
+  options?: { owner?: string; first?: number }
+): Promise<GitHubProject[]> {
+  const first = options?.first || 50;
+  const owner = options?.owner;
+
+  const projectFields = `
+    id
+    number
+    title
+    shortDescription
+    public
+    closed
+    createdAt
+    updatedAt
+    url
+  `;
+
+  // If owner is specified, fetch that specific user/org's projects
+  if (owner) {
+    const query = `
+      query($login: String!, $first: Int!) {
+        user(login: $login) {
+          projectsV2(first: $first) {
+            nodes { ${projectFields} }
+          }
+        }
+      }
+    `;
+    const data = await githubGraphQL<{
+      user?: { projectsV2: { nodes: Array<Record<string, unknown>> } };
+    }>(query, { login: owner, first }, token);
+    const nodes = data.user?.projectsV2?.nodes || [];
+    return nodes.map((p) => ({
+      id: p.id as string,
+      number: p.number as number,
+      title: p.title as string,
+      short_description: (p.shortDescription as string) || null,
+      public: p.public as boolean,
+      closed: p.closed as boolean,
+      created_at: p.createdAt as string,
+      updated_at: p.updatedAt as string,
+      url: p.url as string,
+      owner: owner,
+      items_count: 0,
+    }));
+  }
+
+  // No owner specified: fetch viewer projects + org projects separately
+  const viewerQuery = `
+    query($first: Int!) {
+      viewer {
+        projectsV2(first: $first) {
+          nodes { ${projectFields} }
+        }
+      }
+    }
+  `;
+  const viewerData = await githubGraphQL<{
+    viewer: { projectsV2: { nodes: Array<Record<string, unknown>> } };
+  }>(viewerQuery, { first }, token);
+  const viewerNodes = viewerData.viewer?.projectsV2?.nodes || [];
+
+  // Try fetching org projects separately (may fail if token lacks read:org scope)
+  let orgNodes: Array<Record<string, unknown>> = [];
+  try {
+    const orgQuery = `
+      query($first: Int!) {
+        viewer {
+          organizations(first: 50) {
+            nodes {
+              login
+              projectsV2(first: $first) {
+                nodes { ${projectFields} }
+              }
+            }
+          }
+        }
+      }
+    `;
+    const orgData = await githubGraphQL<{
+      viewer: {
+        organizations: {
+          nodes: Array<{
+            login: string;
+            projectsV2: { nodes: Array<Record<string, unknown>> };
+          }>;
+        };
+      };
+    }>(orgQuery, { first }, token);
+    orgNodes = (orgData.viewer?.organizations?.nodes || []).flatMap((org) =>
+      (org.projectsV2?.nodes || []).map((p) => ({ ...p, _orgLogin: org.login }))
+    );
+  } catch {
+    // Token may lack read:org scope — skip org projects
+  }
+
+  const allNodes = [...viewerNodes, ...orgNodes];
+
+  return allNodes.map((p) => ({
+    id: p.id as string,
+    number: p.number as number,
+    title: p.title as string,
+    short_description: (p.shortDescription as string) || null,
+    public: p.public as boolean,
+    closed: p.closed as boolean,
+    created_at: p.createdAt as string,
+    updated_at: p.updatedAt as string,
+    url: p.url as string,
+    owner: (p._orgLogin as string) || "viewer",
+    items_count: 0,
+  }));
+}
+
+/**
+ * List organizations the authenticated user belongs to.
+ */
+export async function listGitHubUserOrgs(token: string): Promise<Array<{ login: string; name: string | null }>> {
+  const query = `
+    query {
+      viewer {
+        organizations(first: 50) {
+          nodes {
+            login
+            name
+          }
+        }
+      }
+    }
+  `;
+  const data = await githubGraphQL<{
+    viewer: { organizations: { nodes: Array<{ login: string; name: string | null }> } };
+  }>(query, {}, token);
+
+  return data.viewer?.organizations?.nodes || [];
+}
+
+/**
+ * List items in a GitHub Project (v2).
+ * Fetches up to `first` items with their linked issue/PR content.
+ */
+export async function listGitHubProjectItems(
+  token: string,
+  projectId: string,
+  options?: { first?: number }
+): Promise<GitHubProjectItem[]> {
+  const first = options?.first || 50;
+
+  const query = `
+    query($projectId: ID!, $first: Int!) {
+      node(id: $projectId) {
+        ... on ProjectV2 {
+          items(first: $first) {
+            nodes {
+              id
+              type
+              createdAt
+              updatedAt
+              fieldValues(first: 20) {
+                nodes {
+                  ... on ProjectV2ItemFieldTextValue {
+                    text
+                    field { ... on ProjectV2FieldCommon { name } }
+                  }
+                  ... on ProjectV2ItemFieldSingleSelectValue {
+                    name
+                    field { ... on ProjectV2FieldCommon { name } }
+                  }
+                }
+              }
+              content {
+                ... on Issue {
+                  title
+                  body
+                  state
+                  number
+                  url
+                  repository { nameWithOwner }
+                  labels(first: 10) {
+                    nodes {
+                      id
+                      name
+                      color
+                    }
+                  }
+                  assignees(first: 10) {
+                    nodes { login avatarUrl url }
+                  }
+                }
+                ... on PullRequest {
+                  title
+                  body
+                  state
+                  number
+                  url
+                  repository { nameWithOwner }
+                  labels(first: 10) {
+                    nodes {
+                      id
+                      name
+                      color
+                    }
+                  }
+                  assignees(first: 10) {
+                    nodes { login avatarUrl url }
+                  }
+                }
+                ... on DraftIssue {
+                  title
+                  body
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  const data = await githubGraphQL<{
+    node: {
+      items: {
+        nodes: Array<Record<string, unknown>>;
+      };
+    };
+  }>(query, { projectId, first }, token);
+
+  const nodes = data.node?.items?.nodes || [];
+
+  return nodes.map((item) => {
+    const content = (item.content as Record<string, unknown>) || {};
+    const fieldValues = ((item.fieldValues as Record<string, unknown>)?.nodes || []) as Array<Record<string, unknown>>;
+
+    // Extract status from field values
+    let status = "";
+    for (const fv of fieldValues) {
+      const field = fv.field as Record<string, unknown> | undefined;
+      if (field?.name === "Status") {
+        status = (fv.name as string) || (fv.text as string) || "";
+        break;
+      }
+    }
+
+    const isDraft = item.type === "DRAFT_ISSUE";
+
+    return {
+      id: item.id as string,
+      type: item.type as "ISSUE" | "PULL_REQUEST" | "DRAFT_ISSUE",
+      title: (content.title as string) || "",
+      body: (content.body as string) || null,
+      state: isDraft ? null : (content.state as string | null),
+      html_url: isDraft ? null : (content.url as string | null),
+      number: isDraft ? null : (content.number as number | null),
+      repository: isDraft
+        ? null
+        : ((content.repository as Record<string, unknown>)?.nameWithOwner as string | null),
+      labels: isDraft
+        ? []
+        : (((content.labels as Record<string, unknown>)?.nodes || []) as Array<Record<string, unknown>>).map((l) => ({
+            id: l.id as number,
+            name: l.name as string,
+            color: l.color as string,
+            description: null,
+          })),
+      assignees: isDraft
+        ? []
+        : (((content.assignees as Record<string, unknown>)?.nodes || []) as Array<Record<string, unknown>>).map((a) => ({
+            login: a.login as string,
+            avatar_url: a.avatarUrl as string,
+            html_url: a.url as string,
+          })),
+      created_at: item.createdAt as string,
+      updated_at: item.updatedAt as string,
+      status,
+    };
+  });
 }
