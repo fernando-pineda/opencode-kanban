@@ -129,8 +129,6 @@ export interface Setting {
 
 // Typed settings keys with defaults
 export interface GeneralSettings {
-  auto_compact_enabled: boolean;
-  auto_compact_threshold: number; // percentage 0-100, 0 = disabled
   memories_enabled: boolean;
   memories_auto_prune_days: number; // 1-365
   memories_keep_important: boolean;
@@ -333,4 +331,82 @@ export interface GitHubProjectItem {
   created_at: string;
   updated_at: string;
   status: string; // project item status field value
+}
+
+// ── Linear integration types ────────────────────────────────────
+
+export interface LinearConfig {
+  board_id: number;
+  has_token: boolean;
+  token_masked: string; // e.g. "lin_api_****abcd"
+  selected_teams: string[]; // array of team UUIDs
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LinearTeam {
+  id: string; // UUID
+  key: string; // e.g. "ENG" — used in issue identifiers
+  name: string;
+  description: string | null;
+  color: string | null;
+  icon: string | null;
+  archived_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LinearWorkflowState {
+  id: string;
+  name: string;
+  type:
+    | "triage"
+    | "backlog"
+    | "unstarted"
+    | "started"
+    | "completed"
+    | "canceled";
+  color: string;
+}
+
+export interface LinearUser {
+  id: string;
+  name: string;
+  display_name: string;
+  email: string;
+  avatar_url: string | null;
+}
+
+export interface LinearLabel {
+  id: string;
+  name: string;
+  color: string;
+}
+
+export interface LinearIssue {
+  id: string; // UUID
+  identifier: string; // e.g. "ENG-123"
+  number: number;
+  title: string;
+  description: string | null; // markdown
+  priority: number; // 0=No priority, 1=Urgent, 2=High, 3=Medium, 4=Low
+  priority_label: string;
+  url: string;
+  branch_name: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+  canceled_at: string | null;
+  due_date: string | null;
+  estimate: number | null;
+  state: LinearWorkflowState;
+  assignee: LinearUser | null;
+  labels: LinearLabel[];
+  team: {
+    id: string;
+    key: string;
+    name: string;
+  };
+  parent: { id: string; identifier: string; title: string } | null;
+  project: { id: string; name: string } | null;
 }

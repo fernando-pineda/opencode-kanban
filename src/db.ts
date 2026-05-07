@@ -1068,19 +1068,6 @@ export function getAllSettings(): Setting[] {
     .all() as Setting[];
 }
 
-export function getAutoCompactThreshold(): number {
-  const val = getSetting("auto_compact_threshold");
-  if (val === null) return 80; // default
-  const num = parseInt(val, 10);
-  return isNaN(num) ? 80 : Math.max(0, Math.min(100, num));
-}
-
-export function isAutoCompactEnabled(): boolean {
-  const val = getSetting("auto_compact_enabled");
-  if (val === null) return true; // default: enabled
-  return val === "true" || val === "1";
-}
-
 // ── Session model helper ──────────────────────────────────────────
 
 export function getSessionModel(sessionId: string): string | null {
@@ -1096,18 +1083,6 @@ export function getSessionModel(sessionId: string): string | null {
   } catch {
     return null;
   }
-}
-
-export function getActiveSessionIds(): Array<{
-  id: string;
-  directory: string;
-}> {
-  const oneDayAgoMs = Date.now() - 86400000;
-  return db
-    .prepare(
-      "SELECT id, directory FROM session WHERE parent_id IS NULL AND time_updated > ? ORDER BY time_updated DESC",
-    )
-    .all(oneDayAgoMs) as Array<{ id: string; directory: string }>;
 }
 
 export function setSessionCompacting(
@@ -1542,6 +1517,58 @@ export function updateGitHubSelectedProjects(
 
 export function deleteGitHubConfig(boardId: number): void {
   db.prepare("DELETE FROM kanban_github_configs WHERE board_id = ?").run(
+    boardId,
+  );
+}
+
+// ── Linear config helpers ──────────────────────────────────────
+
+export interface LinearConfigRow {
+  board_id: number;
+  linear_api_key: string;
+  selected_teams: string; // JSON array string
+  created_at: string;
+  updated_at: string;
+}
+
+export function getLinearConfig(boardId: number): LinearConfigRow | undefined {
+  return db
+    .prepare("SELECT * FROM kanban_linear_configs WHERE board_id = ?")
+    .get(boardId) as LinearConfigRow | undefined;
+}
+
+export function saveLinearConfig(
+  boardId: number,
+  apiKey: string,
+): void {
+  const teamsJson = JSON.stringify([]);
+  db.prepare(
+    `
+    INSERT INTO kanban_linear_configs (board_id, linear_api_key, selected_teams)
+    VALUES (?, ?, ?)
+    ON CONFLICT(board_id) DO UPDATE SET
+      linear_api_key = excluded.linear_api_key,
+      updated_at = datetime('now')
+  `,
+  ).run(boardId, apiKey, teamsJson);
+}
+
+export function updateLinearSelectedTeams(
+  boardId: number,
+  selectedTeams: string[],
+): void {
+  const teamsJson = JSON.stringify(selectedTeams);
+  db.prepare(
+    `
+    UPDATE kanban_linear_configs
+    SET selected_teams = ?, updated_at = datetime('now')
+    WHERE board_id = ?
+  `,
+  ).run(teamsJson, boardId);
+}
+
+export function deleteLinearConfig(boardId: number): void {
+  db.prepare("DELETE FROM kanban_linear_configs WHERE board_id = ?").run(
     boardId,
   );
 }

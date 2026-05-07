@@ -183,11 +183,8 @@ import {
   getAllSettings,
   getSetting,
   setSetting,
-  getAutoCompactThreshold,
-  isAutoCompactEnabled,
-  getSessionTokens,
+
   getSessionModel,
-  getActiveSessionIds,
   deleteSession,
   setSessionCompacting,
   isSessionCompacting,
@@ -196,6 +193,10 @@ import {
   updateGitHubSelectedRepos,
   updateGitHubSelectedProjects,
   deleteGitHubConfig,
+  getLinearConfig,
+  saveLinearConfig,
+  updateLinearSelectedTeams,
+  deleteLinearConfig,
 } from "./db.js";
 import {
   validateGitHubToken,
@@ -206,6 +207,12 @@ import {
   listGitHubProjects,
   listGitHubProjectItems,
 } from "./github.js";
+import {
+  validateLinearToken,
+  listLinearTeams,
+  listLinearIssues,
+  getLinearIssue,
+} from "./linear.js";
 import {
   searchMemories,
   getMemories,
@@ -1296,6 +1303,217 @@ app.get(
   },
 );
 
+// ── Linear integration ─────────────────────────────────────────
+
+// GET Linear config (token masked)
+app.get("/api/boards/:id/linear/config", (req: Request, res: Response) => {
+  try {
+    const boardId = parseInt(req.params.id, 10);
+    const config = getLinearConfig(boardId);
+    if (!config) {
+      return res.json({
+        board_id: boardId,
+        has_token: false,
+        token_masked: "",
+        selected_teams: [],
+        created_at: "",
+        updated_at: "",
+      });
+    }
+    const token = config.linear_api_key;
+    const masked =
+      token.length > 8 ? token.slice(0, 7) + "****" + token.slice(-4) : "****";
+    res.json({
+      board_id: config.board_id,
+      has_token: true,
+      token_masked: masked,
+      selected_teams: JSON.parse(config.selected_teams || "[]"),
+      created_at: config.created_at,
+      updated_at: config.updated_at,
+    });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// PUT save Linear API key + validate
+app.put(
+  "/api/boards/:id/linear/config",
+  async (req: Request, res: Response) => {
+    try {
+      const boardId = parseInt(req.params.id, 10);
+      const { token } = req.body as { token?: string };
+      if (!token?.trim()) {
+        return res.status(400).json({ error: "API key is required" });
+      }
+      const validation = await validateLinearToken(token.trim());
+      if (!validation.valid) {
+        return res.status(400).json({ error: "Invalid Linear API key" });
+      }
+      saveLinearConfig(boardId, token.trim());
+      res.json({ success: true, user: validation.user });
+    } catch (error) {
+      res.status(400).json({ error: (error as Error).message });
+    }
+  },
+);
+
+// DELETE remove Linear config
+app.delete("/api/boards/:id/linear/config", (req: Request, res: Response) => {
+  try {
+    const boardId = parseInt(req.params.id, 10);
+    deleteLinearConfig(boardId);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// GET accessible teams (from stored API key)
+app.get("/api/boards/:id/linear/teams", async (req: Request, res: Response) => {
+  try {
+    const boardId = parseInt(req.params.id, 10);
+    const config = getLinearConfig(boardId);
+    if (!config) {
+      return res
+        .status(404)
+        .json({ error: "Linear not configured for this board" });
+    }
+    const teams = await listLinearTeams(config.linear_api_key);
+    const selectedTeams: string[] = JSON.parse(config.selected_teams || "[]");
+    res.json({ teams, selected_teams: selectedTeams });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// PUT update selected teams
+app.put("/api/boards/:id/linear/teams", (req: Request, res: Response) => {
+  try {
+    const boardId = parseInt(req.params.id, 10);
+    const { selected_teams } = req.body as { selected_teams?: string[] };
+    if (!Array.isArray(selected_teams)) {
+      return res.status(400).json({ error: "selected_teams must be an array" });
+    }
+    updateLinearSelectedTeams(boardId, selected_teams);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// GET issues for selected teams
+app.get(
+  "/api/boards/:id/linear/issues",
+  async (req: Request, res: Response) => {
+    try {
+      const boardId = parseInt(req.params.id, 10);
+      const config = getLinearConfig(boardId);
+      if (!config) {
+        return res
+          .status(404)
+          .json({ error: "Linear not configured for this board" });
+      }
+
+      const selectedTeams: string[] = JSON.parse(
+        config.selected_teams || "[]",
+      );
+      if (selectedTeams.length === 0) {
+        return res.json({ issues: [], teams: [] });
+      }
+
+      const stateType = (req.query.stateType as string) || undefined;
+      const teamFilter = req.query.team as string | undefined;
+
+      const teamIds = teamFilter
+        ? selectedTeams.filter((t) => t === teamFilter)
+        : selectedTeams;
+
+      const result = await listLinearIssues(config.linear_api_key, teamIds, {
+        stateType,
+      });
+
+      res.json({ issues: result.issues, teams: selectedTeams });
+    } catch (error) {
+      console.error("[linear] Failed to fetch issues:", error);
+      res.status(500).json({ error: (error as Error).message });
+    }
+  },
+);
+
+// POST spawn agent from Linear issue
+app.post(
+  "/api/boards/:id/linear/spawn",
+  async (req: Request, res: Response) => {
+    try {
+      const boardId = parseInt(req.params.id, 10);
+      const { issue, agent } = req.body as {
+        issue?: {
+          identifier: string;
+          title: string;
+          description: string;
+          url: string;
+          team_key: string;
+        };
+        agent?: string;
+      };
+      if (!issue) {
+        return res.status(400).json({ error: "Issue data is required" });
+      }
+
+      const boardFull = getBoardFull(boardId);
+
+      const url = new URL(`${OPENCODE_SERVER}/session`);
+      if (boardFull.board.repo_path)
+        url.searchParams.set("directory", boardFull.board.repo_path);
+      const sessionRes = await fetch(url.toString(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: `${issue.identifier}: ${issue.title}` }),
+      });
+      if (!sessionRes.ok) {
+        const body = await sessionRes.text().catch(() => "");
+        return res
+          .status(sessionRes.status)
+          .json({ error: body || `opencode error ${sessionRes.status}` });
+      }
+      const session = await sessionRes.json();
+
+      const prompt = `## Linear Issue ${issue.identifier}\n\n**Title:** ${issue.title}\n**URL:** ${issue.url}\n\n${issue.description || "(no description)"}\n\n---\n\nPlease analyze and address this Linear issue.`;
+
+      const parts: object[] = [];
+      const mandatoryContext = getMandatoryContext(session.id);
+      if (mandatoryContext.trim()) {
+        parts.push({
+          type: "text",
+          text: `<mandatory>\n${mandatoryContext}\n</mandatory>`,
+        });
+      }
+      parts.push({ type: "text", text: prompt });
+
+      const messageUrl = new URL(
+        `${OPENCODE_SERVER}/session/${session.id}/prompt_async`,
+      );
+      const sessionDir =
+        getSessionDirectory(session.id) || boardFull.board.repo_path;
+      if (sessionDir) messageUrl.searchParams.set("directory", sessionDir);
+      await fetch(messageUrl.toString(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ parts, ...(agent ? { agent } : {}) }),
+      });
+
+      emitBoardChange("card_created", {
+        session_id: session.id,
+        board_id: boardId,
+      });
+      res.json({ session_id: session.id, title: session.title });
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
+    }
+  },
+);
+
 // Sessions/Cards
 app.patch("/api/sessions/:sessionId/move", (req: Request, res: Response) => {
   try {
@@ -2079,119 +2297,6 @@ app.get(
     res.json({ compacting });
   },
 );
-
-// ── Auto-compact monitor ──────────────────────────────────────
-
-// Cache provider context limits from opencode
-let cachedContextLimits: Record<string, number> = {};
-let contextLimitsFetchedAt = 0;
-
-// Cooldown map to prevent retrying failed compactions every 30s
-const lastCompactAttempt = new Map<string, number>();
-const COMPACT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes between attempts
-
-async function fetchContextLimits(): Promise<Record<string, number>> {
-  const now = Date.now();
-  // Cache for 5 minutes
-  if (
-    now - contextLimitsFetchedAt < 300000 &&
-    Object.keys(cachedContextLimits).length > 0
-  ) {
-    return cachedContextLimits;
-  }
-  try {
-    const res = await fetch(`${OPENCODE_SERVER}/provider`);
-    if (!res.ok) return cachedContextLimits;
-    const data = (await res.json()) as {
-      all: Array<{
-        id: string;
-        models: Record<string, { limit?: { context?: number } }>;
-      }>;
-      connected?: string[];
-    };
-    const limits: Record<string, number> = {};
-    for (const provider of data.all) {
-      if (data.connected && !data.connected.includes(provider.id)) continue;
-      for (const [modelId, model] of Object.entries(provider.models)) {
-        const ctx = model.limit?.context;
-        if (ctx && !limits[modelId]) limits[modelId] = ctx;
-      }
-    }
-    cachedContextLimits = limits;
-    contextLimitsFetchedAt = now;
-  } catch {
-    // opencode server may be temporarily unreachable
-  }
-  return cachedContextLimits;
-}
-
-async function checkAutoCompact(): Promise<void> {
-  if (!isAutoCompactEnabled()) return;
-  const threshold = getAutoCompactThreshold();
-  if (threshold <= 0) return;
-
-  const limits = await fetchContextLimits();
-  if (Object.keys(limits).length === 0) return;
-
-  const activeSessions = getActiveSessionIds();
-
-  for (const session of activeSessions) {
-    try {
-      const tokens = getSessionTokens(session.id);
-      if (tokens <= 0) continue;
-
-      // Skip if already compacting (prevents re-triggering)
-      if (isSessionCompacting(session.id)) continue;
-
-      // Cooldown: don't retry failed compaction within 5 minutes
-      const lastAttempt = lastCompactAttempt.get(session.id) || 0;
-      if (Date.now() - lastAttempt < COMPACT_COOLDOWN_MS) continue;
-
-      const modelParts = getSessionModelParts(session.id);
-      if (!modelParts) continue;
-
-      const limit = limits[modelParts.modelID];
-      if (!limit || limit <= 0) continue;
-
-      const ratio = tokens / limit;
-      if (ratio >= threshold / 100) {
-        // Trigger compaction via opencode API
-        const compactUrl = new URL(
-          `${OPENCODE_SERVER}/session/${session.id}/summarize`,
-        );
-        if (session.directory)
-          compactUrl.searchParams.set("directory", session.directory);
-        lastCompactAttempt.set(session.id, Date.now());
-        setSessionCompacting(session.id, true);
-        await fetch(compactUrl.toString(), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            providerID: modelParts.providerID,
-            modelID: modelParts.modelID,
-            auto: true,
-          }),
-        })
-          .then((res) => {
-            if (res.ok) {
-              lastCompactAttempt.delete(session.id); // Clear cooldown on success
-            }
-          })
-          .catch(() => {})
-          .finally(() => {
-            setSessionCompacting(session.id, false);
-          });
-      }
-    } catch {
-      // non-critical per-session failure
-    }
-  }
-}
-
-// Run auto-compact check every 30 seconds
-setInterval(checkAutoCompact, 30000);
-// Initial check after 10 seconds (let server start up)
-setTimeout(checkAutoCompact, 10000);
 
 // ── OpenCode SSE Relay ──────────────────────────────────────
 // Subscribe to opencode's SSE event stream and relay session.status events

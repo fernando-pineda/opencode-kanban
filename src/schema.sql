@@ -153,3 +153,13 @@ CREATE TABLE IF NOT EXISTS kanban_github_configs (
   updated_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_github_configs_board ON kanban_github_configs(board_id);
+
+-- Linear integration — per-board Linear API key and selected teams
+CREATE TABLE IF NOT EXISTS kanban_linear_configs (
+  board_id INTEGER PRIMARY KEY REFERENCES kanban_boards(id) ON DELETE CASCADE,
+  linear_api_key TEXT NOT NULL,
+  selected_teams TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_linear_configs_board ON kanban_linear_configs(board_id);

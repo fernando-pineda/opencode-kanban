@@ -16,6 +16,7 @@ import { BoardFull, Card } from "../types";
 import KanbanColumn from "./kanban-column";
 import MemoriesSheet from "./memories-sheet";
 import GithubSheet from "./github-sheet";
+import LinearSheet from "./linear-sheet";
 import {
   Tooltip,
   TooltipContent,
@@ -39,6 +40,7 @@ export default function KanbanBoard({
 }: KanbanBoardProps) {
   const [memoriesOpen, setMemoriesOpen] = useState(false);
   const [githubOpen, setGithubOpen] = useState(false);
+  const [linearOpen, setLinearOpen] = useState(false);
   const [activeCard, setActiveCard] = useState<Card | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
 
@@ -138,18 +140,31 @@ export default function KanbanBoard({
                 onClick: () => setGithubOpen(true),
               },
               {
+                icon: null,
+                label: "Linear",
+                onClick: () => setLinearOpen(true),
+                customIcon: true,
+              },
+              {
                 icon: PlusCircle,
                 label: "New Session",
                 onClick: onNewSession || (() => {}),
               },
-            ].map(({ icon: Icon, label, onClick }) => (
+            ].map(({ icon: Icon, label, onClick, customIcon }) => (
               <Tooltip key={label}>
                 <TooltipTrigger asChild>
                   <button
                     onClick={onClick}
                     className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
                   >
-                    <Icon className="h-5 w-5" />
+                    {customIcon ? (
+                      <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none">
+                        <rect x="2" y="2" width="20" height="20" rx="4" fill="#5E6AD2" />
+                        <path d="M8 7h2.5l3 5.5V7H16v10h-2.5l-3-5.5V17H8V7z" fill="white" />
+                      </svg>
+                    ) : (
+                      <Icon className="h-5 w-5" />
+                    )}
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="text-xs">
@@ -210,6 +225,11 @@ export default function KanbanBoard({
         boardId={boardId}
         open={githubOpen}
         onOpenChange={setGithubOpen}
+      />
+      <LinearSheet
+        boardId={boardId}
+        open={linearOpen}
+        onOpenChange={setLinearOpen}
       />
     </div>
   );
