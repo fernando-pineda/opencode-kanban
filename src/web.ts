@@ -88,17 +88,24 @@ function getMandatoryContext(sessionId: string): string {
           .join("\n");
         parts.push(`## Repository Knowledge (auto-loaded)\n${kText}`);
       }
-    } catch { /* no knowledge table for this repo yet */ }
+    } catch {
+      /* no knowledge table for this repo yet */
+    }
 
     try {
       const memories = getMemories(repoPath, { limit: 20 });
       if (memories.length > 0) {
         const mText = memories
-          .map((m) => `[${m.memory_type}] ${m.summary || (m.content || "").slice(0, 120)}`)
+          .map(
+            (m) =>
+              `[${m.memory_type}] ${m.summary || (m.content || "").slice(0, 120)}`,
+          )
           .join("\n");
         parts.push(`## Recent Memories (auto-loaded)\n${mText}`);
       }
-    } catch { /* no memories table for this repo yet */ }
+    } catch {
+      /* no memories table for this repo yet */
+    }
   }
 
   return parts.join("\n\n");
@@ -138,11 +145,9 @@ async function proxyToOpencode(req: Request, res: Response) {
     const text = await opencodeRes.text();
     res.send(text);
   } catch (err) {
-    res
-      .status(502)
-      .json({
-        error: `opencode server unreachable: ${(err as Error).message}`,
-      });
+    res.status(502).json({
+      error: `opencode server unreachable: ${(err as Error).message}`,
+    });
   }
 }
 import {
@@ -189,6 +194,7 @@ import {
   getGitHubConfig,
   saveGitHubConfig,
   updateGitHubSelectedRepos,
+  updateGitHubSelectedProjects,
   deleteGitHubConfig,
 } from "./db.js";
 import {
@@ -239,7 +245,10 @@ app.all("/api/opencode/*", proxyToOpencode);
  *  and restarts it with the same arguments. The kanban SSE subscription
  *  auto-reconnects after 3-5 seconds.
  */
-async function restartOpencodeServe(): Promise<{ restarted: boolean; error?: string }> {
+async function restartOpencodeServe(): Promise<{
+  restarted: boolean;
+  error?: string;
+}> {
   return new Promise((resolve) => {
     // Find the opencode serve PID
     exec("pgrep -f 'opencode serve'", (err, stdout) => {
@@ -249,78 +258,100 @@ async function restartOpencodeServe(): Promise<{ restarted: boolean; error?: str
       }
       const pid = parseInt(stdout.trim().split("\n")[0], 10);
       if (isNaN(pid)) {
-        resolve({ restarted: false, error: "Could not determine opencode PID" });
+        resolve({
+          restarted: false,
+          error: "Could not determine opencode PID",
+        });
         return;
       }
 
       // Get the process's working directory
-      exec(`lsof -p ${pid} -Fn 2>/dev/null | grep '^n/' | head -1 | cut -c2-`, (cwdErr, cwdOut) => {
-        const cwd = cwdOut?.trim() || os.homedir();
+      exec(
+        `lsof -p ${pid} -Fn 2>/dev/null | grep '^n/' | head -1 | cut -c2-`,
+        (cwdErr, cwdOut) => {
+          const cwd = cwdOut?.trim() || os.homedir();
 
-        // Send SIGTERM to opencode serve
-        try {
-          process.kill(pid, "SIGTERM");
-        } catch {
-          resolve({ restarted: false, error: `Failed to kill PID ${pid}` });
-          return;
-        }
-
-        // Wait for the process to die (port 4096 to free), then restart
-        let attempts = 0;
-        const maxAttempts = 30; // 15 seconds max
-        const checkAndRestart = () => {
-          attempts++;
+          // Send SIGTERM to opencode serve
           try {
-            process.kill(pid, 0); // throws if process is dead
-            if (attempts < maxAttempts) {
-              setTimeout(checkAndRestart, 500);
-              return;
-            }
-            resolve({ restarted: false, error: "Timeout waiting for opencode to stop" });
-            return;
+            process.kill(pid, "SIGTERM");
           } catch {
-            // Process is dead, restart it
+            resolve({ restarted: false, error: `Failed to kill PID ${pid}` });
+            return;
           }
 
-          // Restart opencode serve in the background
-          const child = exec("nohup opencode serve > /dev/null 2>&1 &", { cwd, env: process.env }, (restartErr) => {
-            if (restartErr) {
-              resolve({ restarted: false, error: `Restart failed: ${restartErr.message}` });
-              return;
-            }
-          });
-
-          // Wait for port 4096 to be listening again
-          let readyAttempts = 0;
-          const maxReadyAttempts = 30;
-          const checkReady = () => {
-            readyAttempts++;
-            fetch(`${OPENCODE_SERVER}/provider`)
-              .then((r) => {
-                if (r.ok) {
-                  resolve({ restarted: true });
-                } else if (readyAttempts < maxReadyAttempts) {
-                  setTimeout(checkReady, 500);
-                } else {
-                  resolve({ restarted: false, error: "opencode did not become ready in time" });
-                }
-              })
-              .catch(() => {
-                if (readyAttempts < maxReadyAttempts) {
-                  setTimeout(checkReady, 500);
-                } else {
-                  resolve({ restarted: false, error: "opencode did not become ready in time" });
-                }
+          // Wait for the process to die (port 4096 to free), then restart
+          let attempts = 0;
+          const maxAttempts = 30; // 15 seconds max
+          const checkAndRestart = () => {
+            attempts++;
+            try {
+              process.kill(pid, 0); // throws if process is dead
+              if (attempts < maxAttempts) {
+                setTimeout(checkAndRestart, 500);
+                return;
+              }
+              resolve({
+                restarted: false,
+                error: "Timeout waiting for opencode to stop",
               });
+              return;
+            } catch {
+              // Process is dead, restart it
+            }
+
+            // Restart opencode serve in the background
+            const child = exec(
+              "nohup opencode serve > /dev/null 2>&1 &",
+              { cwd, env: process.env },
+              (restartErr) => {
+                if (restartErr) {
+                  resolve({
+                    restarted: false,
+                    error: `Restart failed: ${restartErr.message}`,
+                  });
+                  return;
+                }
+              },
+            );
+
+            // Wait for port 4096 to be listening again
+            let readyAttempts = 0;
+            const maxReadyAttempts = 30;
+            const checkReady = () => {
+              readyAttempts++;
+              fetch(`${OPENCODE_SERVER}/provider`)
+                .then((r) => {
+                  if (r.ok) {
+                    resolve({ restarted: true });
+                  } else if (readyAttempts < maxReadyAttempts) {
+                    setTimeout(checkReady, 500);
+                  } else {
+                    resolve({
+                      restarted: false,
+                      error: "opencode did not become ready in time",
+                    });
+                  }
+                })
+                .catch(() => {
+                  if (readyAttempts < maxReadyAttempts) {
+                    setTimeout(checkReady, 500);
+                  } else {
+                    resolve({
+                      restarted: false,
+                      error: "opencode did not become ready in time",
+                    });
+                  }
+                });
+            };
+            setTimeout(checkReady, 1000);
+
+            // Avoid unhandled rejection from the child process
+            child.unref();
           };
-          setTimeout(checkReady, 1000);
 
-          // Avoid unhandled rejection from the child process
-          child.unref();
-        };
-
-        setTimeout(checkAndRestart, 500);
-      });
+          setTimeout(checkAndRestart, 500);
+        },
+      );
     });
   });
 }
@@ -591,20 +622,16 @@ app.post("/api/agents", (req: Request, res: Response) => {
 
     // Validate name
     if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) {
-      res
-        .status(400)
-        .json({
-          error:
-            "Invalid agent name. Use only letters, numbers, hyphens, and underscores.",
-        });
+      res.status(400).json({
+        error:
+          "Invalid agent name. Use only letters, numbers, hyphens, and underscores.",
+      });
       return;
     }
 
     // Validate mode
     if (!mode || (mode !== "primary" && mode !== "subagent")) {
-      res
-        .status(400)
-        .json({ error: "Mode must be 'primary' or 'subagent'" });
+      res.status(400).json({ error: "Mode must be 'primary' or 'subagent'" });
       return;
     }
 
@@ -706,11 +733,9 @@ app.post("/api/sessions", async (req: Request, res: Response) => {
       path: directory ? directory.replace(/^\//, "") : session.path,
     });
   } catch (err) {
-    res
-      .status(502)
-      .json({
-        error: `opencode server unreachable: ${(err as Error).message}`,
-      });
+    res.status(502).json({
+      error: `opencode server unreachable: ${(err as Error).message}`,
+    });
   }
 });
 
@@ -760,11 +785,9 @@ app.post(
       // prompt_async returns 204 — respond immediately
       res.status(200).json({ ok: true });
     } catch (err) {
-      res
-        .status(502)
-        .json({
-          error: `opencode server unreachable: ${(err as Error).message}`,
-        });
+      res.status(502).json({
+        error: `opencode server unreachable: ${(err as Error).message}`,
+      });
     }
   },
 );
@@ -789,11 +812,9 @@ app.get("/api/opencode/question", async (req: Request, res: Response) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     res.json(data);
   } catch (err) {
-    res
-      .status(502)
-      .json({
-        error: `opencode server unreachable: ${(err as Error).message}`,
-      });
+    res.status(502).json({
+      error: `opencode server unreachable: ${(err as Error).message}`,
+    });
   }
 });
 
@@ -821,11 +842,9 @@ app.post(
       const data = await opencodeRes.json();
       res.json(data);
     } catch (err) {
-      res
-        .status(502)
-        .json({
-          error: `opencode server unreachable: ${(err as Error).message}`,
-        });
+      res.status(502).json({
+        error: `opencode server unreachable: ${(err as Error).message}`,
+      });
     }
   },
 );
@@ -853,11 +872,9 @@ app.post(
       const data = await opencodeRes.json();
       res.json(data);
     } catch (err) {
-      res
-        .status(502)
-        .json({
-          error: `opencode server unreachable: ${(err as Error).message}`,
-        });
+      res.status(502).json({
+        error: `opencode server unreachable: ${(err as Error).message}`,
+      });
     }
   },
 );
@@ -904,7 +921,7 @@ app.get("/api/boards/:id", async (req: Request, res: Response) => {
     }
 
     // Propagate has_busy to the board for sidebar indicator
-    boardFull.board.has_busy = boardFull.cards.some(c => c.is_busy === true);
+    boardFull.board.has_busy = boardFull.cards.some((c) => c.is_busy === true);
 
     res.json(boardFull);
   } catch (error) {
@@ -961,19 +978,20 @@ app.get("/api/boards/:id/github/config", (req: Request, res: Response) => {
         has_token: false,
         token_masked: "",
         selected_repos: [],
+        selected_projects: [],
         created_at: "",
         updated_at: "",
       } satisfies import("./types.js").GitHubConfig);
     }
     const token = config.github_token;
-    const masked = token.length > 8
-      ? token.slice(0, 4) + "****" + token.slice(-4)
-      : "****";
+    const masked =
+      token.length > 8 ? token.slice(0, 4) + "****" + token.slice(-4) : "****";
     res.json({
       board_id: config.board_id,
       has_token: true,
       token_masked: masked,
       selected_repos: JSON.parse(config.selected_repos || "[]"),
+      selected_projects: JSON.parse(config.selected_projects || "[]"),
       created_at: config.created_at,
       updated_at: config.updated_at,
     });
@@ -983,25 +1001,28 @@ app.get("/api/boards/:id/github/config", (req: Request, res: Response) => {
 });
 
 // PUT save token + validate
-app.put("/api/boards/:id/github/config", async (req: Request, res: Response) => {
-  try {
-    const boardId = parseInt(req.params.id, 10);
-    const { token } = req.body as { token?: string };
-    if (!token?.trim()) {
-      return res.status(400).json({ error: "Token is required" });
+app.put(
+  "/api/boards/:id/github/config",
+  async (req: Request, res: Response) => {
+    try {
+      const boardId = parseInt(req.params.id, 10);
+      const { token } = req.body as { token?: string };
+      if (!token?.trim()) {
+        return res.status(400).json({ error: "Token is required" });
+      }
+      // Validate the token first
+      const validation = await validateGitHubToken(token.trim());
+      if (!validation.valid) {
+        return res.status(400).json({ error: "Invalid GitHub token" });
+      }
+      // Save with empty selected repos initially
+      saveGitHubConfig(boardId, token.trim(), []);
+      res.json({ success: true, user: validation.user });
+    } catch (error) {
+      res.status(400).json({ error: (error as Error).message });
     }
-    // Validate the token first
-    const validation = await validateGitHubToken(token.trim());
-    if (!validation.valid) {
-      return res.status(400).json({ error: "Invalid GitHub token" });
-    }
-    // Save with empty selected repos initially
-    saveGitHubConfig(boardId, token.trim(), []);
-    res.json({ success: true, user: validation.user });
-  } catch (error) {
-    res.status(400).json({ error: (error as Error).message });
-  }
-});
+  },
+);
 
 // DELETE remove config
 app.delete("/api/boards/:id/github/config", (req: Request, res: Response) => {
@@ -1020,7 +1041,9 @@ app.get("/api/boards/:id/github/repos", async (req: Request, res: Response) => {
     const boardId = parseInt(req.params.id, 10);
     const config = getGitHubConfig(boardId);
     if (!config) {
-      return res.status(404).json({ error: "GitHub not configured for this board" });
+      return res
+        .status(404)
+        .json({ error: "GitHub not configured for this board" });
     }
     const repos = await listGitHubRepos(config.github_token);
     const selectedRepos: string[] = JSON.parse(config.selected_repos || "[]");
@@ -1045,155 +1068,233 @@ app.put("/api/boards/:id/github/repos", (req: Request, res: Response) => {
   }
 });
 
-// GET issues for selected repos
-app.get("/api/boards/:id/github/issues", async (req: Request, res: Response) => {
+// PUT update selected projects
+app.put("/api/boards/:id/github/projects", (req: Request, res: Response) => {
   try {
-    const boardId = parseInt(req.params.id, 10);
-    const config = getGitHubConfig(boardId);
-    if (!config) {
-      return res.status(404).json({ error: "GitHub not configured for this board" });
+    const boardId = parseInt(req.params.id);
+    const { selected_projects } = req.body as { selected_projects: string[] };
+    if (!Array.isArray(selected_projects)) {
+      res.status(400).json({ error: "selected_projects must be an array" });
+      return;
     }
-    const selectedRepos: string[] = JSON.parse(config.selected_repos || "[]");
-    if (selectedRepos.length === 0) {
-      return res.json({ repos: {} });
-    }
-    const state = (req.query.state as string) || "open";
-    const repoParam = req.query.repo as string | undefined;
-
-    // If specific repo requested, only fetch that one
-    const reposToFetch = repoParam ? [repoParam] : selectedRepos;
-    const result: Record<string, import("./types.js").GitHubIssue[]> = {};
-
-    for (const fullName of reposToFetch) {
-      try {
-        const { owner, repo } = parseRepoFullName(fullName);
-        const { issues } = await listGitHubIssues(config.github_token, owner, repo, {
-          state: state as "open" | "closed" | "all",
-        });
-        result[fullName] = issues;
-      } catch (err) {
-        // If one repo fails, still return others
-        result[fullName] = [];
-        console.error(`[github] Failed to fetch issues for ${fullName}:`, err);
-      }
-    }
-    res.json({ repos: result });
+    updateGitHubSelectedProjects(boardId, selected_projects);
+    res.json({ ok: true });
   } catch (error) {
+    console.error("[github] Failed to save selected projects:", error);
     res.status(500).json({ error: (error as Error).message });
   }
 });
+
+// GET issues for selected repos
+app.get(
+  "/api/boards/:id/github/issues",
+  async (req: Request, res: Response) => {
+    try {
+      const boardId = parseInt(req.params.id, 10);
+      const config = getGitHubConfig(boardId);
+      if (!config) {
+        return res
+          .status(404)
+          .json({ error: "GitHub not configured for this board" });
+      }
+      const selectedRepos: string[] = JSON.parse(config.selected_repos || "[]");
+      if (selectedRepos.length === 0) {
+        return res.json({ repos: {} });
+      }
+      const state = (req.query.state as string) || "open";
+      const repoParam = req.query.repo as string | undefined;
+
+      // If specific repo requested, only fetch that one
+      const reposToFetch = repoParam ? [repoParam] : selectedRepos;
+      const result: Record<string, import("./types.js").GitHubIssue[]> = {};
+
+      for (const fullName of reposToFetch) {
+        try {
+          const { owner, repo } = parseRepoFullName(fullName);
+          const { issues } = await listGitHubIssues(
+            config.github_token,
+            owner,
+            repo,
+            {
+              state: state as "open" | "closed" | "all",
+            },
+          );
+          result[fullName] = issues;
+        } catch (err) {
+          // If one repo fails, still return others
+          result[fullName] = [];
+          console.error(
+            `[github] Failed to fetch issues for ${fullName}:`,
+            err,
+          );
+        }
+      }
+      res.json({ repos: result });
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
+    }
+  },
+);
 
 // GET single issue detail
-app.get("/api/boards/:id/github/issues/:owner/:repo/:number", async (req: Request, res: Response) => {
-  try {
-    const boardId = parseInt(req.params.id, 10);
-    const config = getGitHubConfig(boardId);
-    if (!config) {
-      return res.status(404).json({ error: "GitHub not configured for this board" });
+app.get(
+  "/api/boards/:id/github/issues/:owner/:repo/:number",
+  async (req: Request, res: Response) => {
+    try {
+      const boardId = parseInt(req.params.id, 10);
+      const config = getGitHubConfig(boardId);
+      if (!config) {
+        return res
+          .status(404)
+          .json({ error: "GitHub not configured for this board" });
+      }
+      const { owner, repo, number } = req.params;
+      const issue = await getGitHubIssue(
+        config.github_token,
+        owner,
+        repo,
+        parseInt(number, 10),
+      );
+      res.json(issue);
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
     }
-    const { owner, repo, number } = req.params;
-    const issue = await getGitHubIssue(
-      config.github_token,
-      owner,
-      repo,
-      parseInt(number, 10)
-    );
-    res.json(issue);
-  } catch (error) {
-    res.status(500).json({ error: (error as Error).message });
-  }
-});
+  },
+);
 
 // POST spawn agent from issue
-app.post("/api/boards/:id/github/spawn", async (req: Request, res: Response) => {
-  try {
-    const boardId = parseInt(req.params.id, 10);
-    const { issue, agent } = req.body as {
-      issue?: { title: string; body: string; html_url: string; number: number; repository_url: string };
-      agent?: string;
-    };
-    if (!issue) {
-      return res.status(400).json({ error: "Issue data is required" });
+app.post(
+  "/api/boards/:id/github/spawn",
+  async (req: Request, res: Response) => {
+    try {
+      const boardId = parseInt(req.params.id, 10);
+      const { issue, agent } = req.body as {
+        issue?: {
+          title: string;
+          body: string;
+          html_url: string;
+          number: number;
+          repository_url: string;
+        };
+        agent?: string;
+      };
+      if (!issue) {
+        return res.status(400).json({ error: "Issue data is required" });
+      }
+
+      // Get board info for directory
+      const boardFull = getBoardFull(boardId);
+
+      // Create session via opencode
+      const url = new URL(`${OPENCODE_SERVER}/session`);
+      if (boardFull.board.repo_path)
+        url.searchParams.set("directory", boardFull.board.repo_path);
+      const sessionRes = await fetch(url.toString(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: `GH #${issue.number}: ${issue.title}` }),
+      });
+      if (!sessionRes.ok) {
+        const body = await sessionRes.text().catch(() => "");
+        return res
+          .status(sessionRes.status)
+          .json({ error: body || `opencode error ${sessionRes.status}` });
+      }
+      const session = await sessionRes.json();
+
+      // Build the prompt from the issue
+      const prompt = `## GitHub Issue #${issue.number}\n\n**Title:** ${issue.title}\n**URL:** ${issue.html_url}\n\n${issue.body || "(no description)"}\n\n---\n\nPlease analyze and address this GitHub issue.`;
+
+      // Send the message via opencode
+      const parts: object[] = [];
+      const mandatoryContext = getMandatoryContext(session.id);
+      if (mandatoryContext.trim()) {
+        parts.push({
+          type: "text",
+          text: `<mandatory>\n${mandatoryContext}\n</mandatory>`,
+        });
+      }
+      parts.push({ type: "text", text: prompt });
+
+      const messageUrl = new URL(
+        `${OPENCODE_SERVER}/session/${session.id}/prompt_async`,
+      );
+      const sessionDir =
+        getSessionDirectory(session.id) || boardFull.board.repo_path;
+      if (sessionDir) messageUrl.searchParams.set("directory", sessionDir);
+      await fetch(messageUrl.toString(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ parts, ...(agent ? { agent } : {}) }),
+      });
+
+      emitBoardChange("card_created", {
+        session_id: session.id,
+        board_id: boardId,
+      });
+      res.json({ session_id: session.id, title: session.title });
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
     }
-
-    // Get board info for directory
-    const boardFull = getBoardFull(boardId);
-
-    // Create session via opencode
-    const url = new URL(`${OPENCODE_SERVER}/session`);
-    if (boardFull.board.repo_path) url.searchParams.set("directory", boardFull.board.repo_path);
-    const sessionRes = await fetch(url.toString(), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: `GH #${issue.number}: ${issue.title}` }),
-    });
-    if (!sessionRes.ok) {
-      const body = await sessionRes.text().catch(() => "");
-      return res.status(sessionRes.status).json({ error: body || `opencode error ${sessionRes.status}` });
-    }
-    const session = await sessionRes.json();
-
-    // Build the prompt from the issue
-    const prompt = `## GitHub Issue #${issue.number}\n\n**Title:** ${issue.title}\n**URL:** ${issue.html_url}\n\n${issue.body || "(no description)"}\n\n---\n\nPlease analyze and address this GitHub issue.`;
-
-    // Send the message via opencode
-    const parts: object[] = [];
-    const mandatoryContext = getMandatoryContext(session.id);
-    if (mandatoryContext.trim()) {
-      parts.push({ type: "text", text: `<mandatory>\n${mandatoryContext}\n</mandatory>` });
-    }
-    parts.push({ type: "text", text: prompt });
-
-    const messageUrl = new URL(`${OPENCODE_SERVER}/session/${session.id}/prompt_async`);
-    const sessionDir = getSessionDirectory(session.id) || boardFull.board.repo_path;
-    if (sessionDir) messageUrl.searchParams.set("directory", sessionDir);
-    await fetch(messageUrl.toString(), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ parts, ...(agent ? { agent } : {}) }),
-    });
-
-    emitBoardChange("card_created", { session_id: session.id, board_id: boardId });
-    res.json({ session_id: session.id, title: session.title });
-  } catch (error) {
-    res.status(500).json({ error: (error as Error).message });
-  }
-});
+  },
+);
 
 // ── GitHub Projects ────────────────────────────────────────────
 
-app.get("/api/boards/:id/github/projects", async (req: Request, res: Response) => {
-  try {
-    const boardId = parseInt(req.params.id);
-    const config = getGitHubConfig(boardId);
-    if (!config) {
-       res.json({ projects: [] });
-       return;
+app.get(
+  "/api/boards/:id/github/projects",
+  async (req: Request, res: Response) => {
+    try {
+      const boardId = parseInt(req.params.id);
+      const config = getGitHubConfig(boardId);
+      if (!config) {
+        res.json({ projects: [] });
+        return;
+      }
+      const projects = await listGitHubProjects(config.github_token);
+      // If ?all=true, return all projects (for picker)
+      if (req.query.all === "true") {
+        res.json({ projects });
+        return;
+      }
+      // Otherwise filter to selected projects
+      const selectedProjects = JSON.parse(config.selected_projects || "[]");
+      const filtered =
+        selectedProjects.length > 0
+          ? projects.filter((p: { id: string }) =>
+              selectedProjects.includes(p.id),
+            )
+          : [];
+      res.json({ projects: filtered });
+    } catch (error) {
+      console.error("[github] Failed to fetch projects:", error);
+      res.status(500).json({ error: (error as Error).message });
     }
-    const projects = await listGitHubProjects(config.github_token);
-    res.json({ projects });
-  } catch (error) {
-    console.error("[github] Failed to fetch projects:", error);
-    res.status(500).json({ error: (error as Error).message });
-  }
-});
+  },
+);
 
-app.get("/api/boards/:id/github/projects/:projectId/items", async (req: Request, res: Response) => {
-  try {
-    const boardId = parseInt(req.params.id);
-    const { projectId } = req.params;
-    const config = getGitHubConfig(boardId);
-    if (!config) {
-       res.json({ items: [] });
-       return;
+app.get(
+  "/api/boards/:id/github/projects/:projectId/items",
+  async (req: Request, res: Response) => {
+    try {
+      const boardId = parseInt(req.params.id);
+      const { projectId } = req.params;
+      const config = getGitHubConfig(boardId);
+      if (!config) {
+        res.json({ items: [] });
+        return;
+      }
+      const items = await listGitHubProjectItems(
+        config.github_token,
+        projectId,
+      );
+      res.json({ items });
+    } catch (error) {
+      console.error("[github] Failed to fetch project items:", error);
+      res.status(500).json({ error: (error as Error).message });
     }
-    const items = await listGitHubProjectItems(config.github_token, projectId);
-    res.json({ items });
-  } catch (error) {
-    console.error("[github] Failed to fetch project items:", error);
-    res.status(500).json({ error: (error as Error).message });
-  }
-});
+  },
+);
 
 // Sessions/Cards
 app.patch("/api/sessions/:sessionId/move", (req: Request, res: Response) => {
@@ -1400,7 +1501,9 @@ app.get("/api/memories/search", (req: Request, res: Response) => {
     const repo_path = req.query.repo_path as string;
     const query = req.query.query as string;
     if (!repo_path || !query) {
-      return res.status(400).json({ error: "repo_path and query are required" });
+      return res
+        .status(400)
+        .json({ error: "repo_path and query are required" });
     }
     const results = searchMemories(repo_path, {
       query,
@@ -1417,7 +1520,7 @@ app.get("/api/memories/search", (req: Request, res: Response) => {
 
 // List memories (paginated)
 app.get("/api/memories", (req: Request, res: Response) => {
-    try {
+  try {
     const repo_path = req.query.repo_path as string;
     if (!repo_path) {
       return res.status(400).json({ error: "repo_path is required" });
@@ -1490,7 +1593,9 @@ app.get("/api/knowledge/search", (req: Request, res: Response) => {
     const repo_path = req.query.repo_path as string;
     const query = req.query.query as string;
     if (!repo_path || !query) {
-      return res.status(400).json({ error: "repo_path and query are required" });
+      return res
+        .status(400)
+        .json({ error: "repo_path and query are required" });
     }
     const results = searchKnowledge(repo_path, {
       query,
@@ -1510,7 +1615,9 @@ app.get("/api/knowledge/entry", (req: Request, res: Response) => {
     const category = req.query.category as KnowledgeCategory;
     const key = req.query.key as string;
     if (!repo_path || !category || !key) {
-      return res.status(400).json({ error: "repo_path, category, and key are required" });
+      return res
+        .status(400)
+        .json({ error: "repo_path, category, and key are required" });
     }
     const result = getKnowledge(repo_path, { category, key });
     if (!result) {
@@ -1583,7 +1690,9 @@ app.delete("/api/knowledge", (req: Request, res: Response) => {
     const category = req.query.category as KnowledgeCategory;
     const key = req.query.key as string;
     if (!repo_path || !category || !key) {
-      return res.status(400).json({ error: "repo_path, category, and key are required" });
+      return res
+        .status(400)
+        .json({ error: "repo_path, category, and key are required" });
     }
     const deleted = deleteKnowledge(repo_path, { category, key });
     res.json({ deleted });
@@ -1648,7 +1757,6 @@ app.delete("/api/rules/:id", (req: Request, res: Response) => {
     res.status(500).json({ error: (error as Error).message });
   }
 });
-
 
 // ── Server-Sent Events (SSE) ────────────────────────────────
 
@@ -1952,11 +2060,9 @@ app.post(
     } catch (err) {
       // If headers not yet sent, send error; otherwise just log
       if (!res.headersSent) {
-        res
-          .status(502)
-          .json({
-            error: `opencode server unreachable: ${(err as Error).message}`,
-          });
+        res.status(502).json({
+          error: `opencode server unreachable: ${(err as Error).message}`,
+        });
       }
       // Clear compacting flag if we set it
       const { sessionId } = req.params;
@@ -1979,6 +2085,10 @@ app.get(
 // Cache provider context limits from opencode
 let cachedContextLimits: Record<string, number> = {};
 let contextLimitsFetchedAt = 0;
+
+// Cooldown map to prevent retrying failed compactions every 30s
+const lastCompactAttempt = new Map<string, number>();
+const COMPACT_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes between attempts
 
 async function fetchContextLimits(): Promise<Record<string, number>> {
   const now = Date.now();
@@ -2030,6 +2140,13 @@ async function checkAutoCompact(): Promise<void> {
       const tokens = getSessionTokens(session.id);
       if (tokens <= 0) continue;
 
+      // Skip if already compacting (prevents re-triggering)
+      if (isSessionCompacting(session.id)) continue;
+
+      // Cooldown: don't retry failed compaction within 5 minutes
+      const lastAttempt = lastCompactAttempt.get(session.id) || 0;
+      if (Date.now() - lastAttempt < COMPACT_COOLDOWN_MS) continue;
+
       const modelParts = getSessionModelParts(session.id);
       if (!modelParts) continue;
 
@@ -2044,6 +2161,7 @@ async function checkAutoCompact(): Promise<void> {
         );
         if (session.directory)
           compactUrl.searchParams.set("directory", session.directory);
+        lastCompactAttempt.set(session.id, Date.now());
         setSessionCompacting(session.id, true);
         await fetch(compactUrl.toString(), {
           method: "POST",
@@ -2054,6 +2172,11 @@ async function checkAutoCompact(): Promise<void> {
             auto: true,
           }),
         })
+          .then((res) => {
+            if (res.ok) {
+              lastCompactAttempt.delete(session.id); // Clear cooldown on success
+            }
+          })
           .catch(() => {})
           .finally(() => {
             setSessionCompacting(session.id, false);
@@ -2118,7 +2241,9 @@ function subscribeToOpencodeEvents() {
                   eventData.properties?.sessionID
                 ) {
                   const sessionID = eventData.properties.sessionID;
-                  const currentStatus = eventData.properties.status?.type || eventData.properties.status;
+                  const currentStatus =
+                    eventData.properties.status?.type ||
+                    eventData.properties.status;
 
                   bus.emit(
                     "opencode_session_status" as any,
@@ -2129,17 +2254,29 @@ function subscribeToOpencodeEvents() {
                   );
                 }
                 // Relay streaming message events to frontend via event bus
-                if (eventData.type === "message.part.updated" && eventData.properties?.sessionID) {
-                  bus.emit("opencode_message_part_updated" as any, {
-                    sessionID: eventData.properties.sessionID,
-                    part: eventData.properties.part,
-                  } as any);
+                if (
+                  eventData.type === "message.part.updated" &&
+                  eventData.properties?.sessionID
+                ) {
+                  bus.emit(
+                    "opencode_message_part_updated" as any,
+                    {
+                      sessionID: eventData.properties.sessionID,
+                      part: eventData.properties.part,
+                    } as any,
+                  );
                 }
-                if (eventData.type === "message.updated" && eventData.properties?.sessionID) {
-                  bus.emit("opencode_message_updated" as any, {
-                    sessionID: eventData.properties.sessionID,
-                    info: eventData.properties.info,
-                  } as any);
+                if (
+                  eventData.type === "message.updated" &&
+                  eventData.properties?.sessionID
+                ) {
+                  bus.emit(
+                    "opencode_message_updated" as any,
+                    {
+                      sessionID: eventData.properties.sessionID,
+                      info: eventData.properties.info,
+                    } as any,
+                  );
                 }
               } catch {
                 // ignore parse errors

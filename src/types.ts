@@ -138,9 +138,23 @@ export interface GeneralSettings {
 
 // ── Memory types (memories.db) ──────────────────────────────
 
-export type MemoryType = 'context' | 'decision' | 'finding' | 'pattern' | 'error' | 'preference';
+export type MemoryType =
+  | "context"
+  | "decision"
+  | "finding"
+  | "pattern"
+  | "error"
+  | "preference";
 
-export type KnowledgeCategory = 'file' | 'command' | 'architecture' | 'api' | 'config' | 'schema' | 'workflow' | 'gotcha';
+export type KnowledgeCategory =
+  | "file"
+  | "command"
+  | "architecture"
+  | "api"
+  | "config"
+  | "schema"
+  | "workflow"
+  | "gotcha";
 
 export interface Memory {
   id: number;
@@ -195,7 +209,12 @@ export interface MemoriesStats {
 export interface KnowledgeStats {
   total: number;
   by_category: Array<{ category: string; count: number }>;
-  top_accessed: Array<{ category: string; key: string; title: string; access_count: number }>;
+  top_accessed: Array<{
+    category: string;
+    key: string;
+    title: string;
+    access_count: number;
+  }>;
 }
 
 export interface KnowledgeListOptions {
@@ -239,6 +258,7 @@ export interface GitHubConfig {
   has_token: boolean;
   token_masked: string; // e.g. "ghp_****abcd"
   selected_repos: string[]; // e.g. ["owner/repo", ...]
+  selected_projects: string[]; // array of project IDs (GraphQL node IDs)
   created_at: string;
   updated_at: string;
 }
@@ -286,21 +306,21 @@ export interface GitHubIssue {
 }
 
 export interface GitHubProject {
-  id: string;           // GraphQL node ID
-  number: number;       // project number
+  id: string; // GraphQL node ID
+  number: number; // project number
   title: string;
   short_description: string | null;
   public: boolean;
   closed: boolean;
   created_at: string;
   updated_at: string;
-  url: string;          // web URL
-  owner: string;        // org or user login
+  url: string; // web URL
+  owner: string; // org or user login
   items_count: number;
 }
 
 export interface GitHubProjectItem {
-  id: string;           // GraphQL node ID
+  id: string; // GraphQL node ID
   type: "ISSUE" | "PULL_REQUEST" | "DRAFT_ISSUE";
   title: string;
   body: string | null;
@@ -312,5 +332,5 @@ export interface GitHubProjectItem {
   assignees: GitHubUser[];
   created_at: string;
   updated_at: string;
-  status: string;       // project item status field value
+  status: string; // project item status field value
 }

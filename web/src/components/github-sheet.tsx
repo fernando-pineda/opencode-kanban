@@ -23,6 +23,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { Separator } from '@/components/ui/separator'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   Select,
   SelectContent,
@@ -42,6 +43,7 @@ import {
   Eye,
   Search,
   LayoutList,
+  FolderGit2,
 } from 'lucide-react'
 import type {
   GitHubConfig,
@@ -99,11 +101,25 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
   const [showRepoPicker, setShowRepoPicker] = useState(false)
   const [repoFilter, setRepoFilter] = useState('')
 
+  // Project picker state
+  const [allProjects, setAllProjects] = useState<GitHubProject[]>([])
+  const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([])
+  const [projectFilter, setProjectFilter] = useState('')
+  const [loadingProjects, setLoadingProjects] = useState(false)
+  const [showProjectPicker, setShowProjectPicker] = useState(false)
+
   // Issues state
   const [issuesByRepo, setIssuesByRepo] = useState<Record<string, GitHubIssue[]>>({})
   const [loadingIssues, setLoadingIssues] = useState(false)
   const [activeRepoTab, setActiveRepoTab] = useState<string>('')
   const [issuesFilter, setIssuesFilter] = useState('')
+
+  // Projects view state
+  const [projects, setProjects] = useState<GitHubProject[]>([])
+  const [activeProjectTab, setActiveProjectTab] = useState<string>('')
+  const [projectItems, setProjectItems] = useState<GitHubProjectItem[]>([])
+  const [loadingProjectItems, setLoadingProjectItems] = useState(false)
+  const [projectItemsFilter, setProjectItemsFilter] = useState('')
 
   // Spawn dialog state
   const [spawnDialogOpen, setSpawnDialogOpen] = useState(false)
@@ -115,16 +131,11 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
   // Issue detail state
   const [detailIssue, setDetailIssue] = useState<GitHubIssue | null>(null)
 
+  // Project item detail state
+  const [detailProjectItem, setDetailProjectItem] = useState<GitHubProjectItem | null>(null)
+
   // Tab state
   const [activeMainTab, setActiveMainTab] = useState('issues')
-
-  // Projects state
-  const [projects, setProjects] = useState<GitHubProject[]>([])
-  const [loadingProjects, setLoadingProjects] = useState(false)
-  const [selectedProject, setSelectedProject] = useState<GitHubProject | null>(null)
-  const [projectItems, setProjectItems] = useState<GitHubProjectItem[]>([])
-  const [loadingProjectItems, setLoadingProjectItems] = useState(false)
-  const [detailProjectItem, setDetailProjectItem] = useState<GitHubProjectItem | null>(null)
 
   // ── Reset on board change ────────────────────────────────────────
   useEffect(() => {
@@ -148,11 +159,16 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
     setSpawning(false)
     setDetailIssue(null)
     setActiveMainTab('issues')
-    setProjects([])
+    setAllProjects([])
+    setSelectedProjectIds([])
+    setProjectFilter('')
     setLoadingProjects(false)
-    setSelectedProject(null)
+    setShowProjectPicker(false)
+    setProjects([])
+    setActiveProjectTab('')
     setProjectItems([])
     setLoadingProjectItems(false)
+    setProjectItemsFilter('')
     setDetailProjectItem(null)
   }, [boardId])
 
@@ -167,12 +183,15 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
       if (data.selected_repos?.length > 0 && !activeRepoTab) {
         setActiveRepoTab(data.selected_repos[0])
       }
+      if (data.selected_projects?.length > 0 && !activeProjectTab) {
+        setActiveProjectTab(data.selected_projects[0])
+      }
     } catch {
       // ignore
     } finally {
       setLoadingConfig(false)
     }
-  }, [boardId, activeRepoTab])
+  }, [boardId, activeRepoTab, activeProjectTab])
 
   useEffect(() => {
     if (open) fetchConfig()
@@ -183,6 +202,7 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
   const fetchRepos = useCallback(async () => {
     setLoadingRepos(true)
     setShowRepoPicker(true)
+    setShowProjectPicker(false)
     try {
       const res = await fetch(`/api/boards/${boardId}/github/repos`)
       if (res.ok) {
@@ -196,6 +216,27 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
       setLoadingRepos(false)
     }
   }, [boardId])
+
+  // ── Fetch projects (for picker) ────────────────────────────────
+
+  const fetchProjectPicker = useCallback(async () => {
+    if (!config?.has_token) return
+    setLoadingProjects(true)
+    setShowProjectPicker(true)
+    setShowRepoPicker(false)
+    try {
+      const res = await fetch(`/api/boards/${boardId}/github/projects?all=true`)
+      if (res.ok) {
+        const data = await res.json()
+        setAllProjects(data.projects || [])
+        setSelectedProjectIds(config.selected_projects || [])
+      }
+    } catch {
+      // ignore
+    } finally {
+      setLoadingProjects(false)
+    }
+  }, [boardId, config?.has_token, config?.selected_projects])
 
   // ── Save token ─────────────────────────────────────────────────
 
@@ -243,6 +284,26 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
     }
   }
 
+  // ── Save selected projects ─────────────────────────────────────
+
+  const handleSaveProjects = async () => {
+    try {
+      await fetch(`/api/boards/${boardId}/github/projects`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ selected_projects: selectedProjectIds }),
+      })
+      setShowProjectPicker(false)
+      await fetchConfig()
+      if (selectedProjectIds.length > 0) {
+        const firstProject = allProjects.find(p => selectedProjectIds.includes(p.id))
+        if (firstProject) setActiveProjectTab(firstProject.id)
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   // ── Fetch issues ───────────────────────────────────────────────
 
   const fetchIssues = useCallback(async () => {
@@ -268,6 +329,54 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
       fetchIssues()
     }
   }, [open, config?.has_token, config?.selected_repos, activeRepoTab, fetchIssues])
+
+  // ── Fetch projects (for Projects tab — filtered) ───────────────
+
+  const fetchProjects = useCallback(async (force?: boolean) => {
+    if (!config?.has_token) return
+    // Skip re-fetch if we already have data (unless forced)
+    if (!force && projects.length > 0) return
+    setLoadingProjects(true)
+    try {
+      const res = await fetch(`/api/boards/${boardId}/github/projects`)
+      if (res.ok) {
+        const data = await res.json()
+        setProjects(data.projects || [])
+        // Auto-select first project if none selected
+        if (!activeProjectTab && data.projects?.length > 0) {
+          setActiveProjectTab(data.projects[0].id)
+        }
+      }
+    } catch {
+      // ignore
+    } finally {
+      setLoadingProjects(false)
+    }
+  }, [boardId, config?.has_token, activeProjectTab, projects.length])
+
+  const fetchProjectItems = useCallback(async (projectId: string) => {
+    setLoadingProjectItems(true)
+    try {
+      const res = await fetch(`/api/boards/${boardId}/github/projects/${projectId}/items`)
+      if (res.ok) {
+        const data = await res.json()
+        setProjectItems(data.items || [])
+      }
+    } catch {
+      // ignore
+    } finally {
+      setLoadingProjectItems(false)
+    }
+  }, [boardId])
+
+  useEffect(() => {
+    if (open && config?.has_token && activeMainTab === 'projects' && !showProjectPicker) {
+      if (activeProjectTab) {
+        fetchProjectItems(activeProjectTab)
+      }
+      fetchProjects()
+    }
+  }, [open, config?.has_token, activeMainTab, activeProjectTab, showProjectPicker, fetchProjects, fetchProjectItems])
 
   // ── Fetch agents (for spawn dialog) ────────────────────────────
 
@@ -324,9 +433,12 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
       setSelectedRepos([])
       setIssuesByRepo({})
       setShowRepoPicker(false)
+      setShowProjectPicker(false)
       setActiveRepoTab('')
+      setAllProjects([])
+      setSelectedProjectIds([])
       setProjects([])
-      setSelectedProject(null)
+      setActiveProjectTab('')
       setProjectItems([])
       setDetailProjectItem(null)
       setActiveMainTab('issues')
@@ -335,49 +447,6 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
     }
   }
 
-  // ── Fetch projects ──────────────────────────────────────────────
-
-  const fetchProjects = useCallback(async () => {
-    if (!config?.has_token) return
-    setLoadingProjects(true)
-    try {
-      const res = await fetch(`/api/boards/${boardId}/github/projects`)
-      if (res.ok) {
-        const data = await res.json()
-        setProjects(data.projects || [])
-      }
-    } catch {
-      // ignore
-    } finally {
-      setLoadingProjects(false)
-    }
-  }, [boardId, config?.has_token])
-
-  const fetchProjectItems = useCallback(async (projectId: string) => {
-    setLoadingProjectItems(true)
-    try {
-      const res = await fetch(`/api/boards/${boardId}/github/projects/${projectId}/items`)
-      if (res.ok) {
-        const data = await res.json()
-        setProjectItems(data.items || [])
-      }
-    } catch {
-      // ignore
-    } finally {
-      setLoadingProjectItems(false)
-    }
-  }, [boardId])
-
-  useEffect(() => {
-    if (open && config?.has_token && activeMainTab === 'projects') {
-      if (selectedProject) {
-        fetchProjectItems(selectedProject.id)
-      } else {
-        fetchProjects()
-      }
-    }
-  }, [open, config?.has_token, activeMainTab, selectedProject, fetchProjects, fetchProjectItems])
-
   // ── Toggle repo selection ──────────────────────────────────────
 
   const toggleRepo = (fullName: string) => {
@@ -385,6 +454,16 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
       prev.includes(fullName)
         ? prev.filter(r => r !== fullName)
         : [...prev, fullName]
+    )
+  }
+
+  // ── Toggle project selection ───────────────────────────────────
+
+  const toggleProject = (projectId: string) => {
+    setSelectedProjectIds(prev =>
+      prev.includes(projectId)
+        ? prev.filter(id => id !== projectId)
+        : [...prev, projectId]
     )
   }
 
@@ -405,6 +484,22 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
       )
     : repos
 
+  const filteredPickerProjects = projectFilter
+    ? allProjects.filter(p =>
+        p.title.toLowerCase().includes(projectFilter.toLowerCase()) ||
+        (p.short_description && p.short_description.toLowerCase().includes(projectFilter.toLowerCase())) ||
+        p.owner.toLowerCase().includes(projectFilter.toLowerCase())
+      )
+    : allProjects
+
+  const filteredProjectItems = projectItemsFilter
+    ? projectItems.filter(i =>
+        i.title.toLowerCase().includes(projectItemsFilter.toLowerCase()) ||
+        (i.status && i.status.toLowerCase().includes(projectItemsFilter.toLowerCase())) ||
+        (i.repository && i.repository.toLowerCase().includes(projectItemsFilter.toLowerCase()))
+      )
+    : projectItems
+
   // Virtualizer: repo picker
   const repoScrollRef = useRef<HTMLDivElement>(null)
   const repoVirtualizer = useVirtualizer({
@@ -423,19 +518,19 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
     overscan: 10,
   })
 
-  // Virtualizer: projects list
-  const projectScrollRef = useRef<HTMLDivElement>(null)
-  const projectVirtualizer = useVirtualizer({
-    count: projects.length,
-    getScrollElement: () => projectScrollRef.current,
-    estimateSize: () => 48,
+  // Virtualizer: project picker
+  const projectPickerScrollRef = useRef<HTMLDivElement>(null)
+  const projectPickerVirtualizer = useVirtualizer({
+    count: filteredPickerProjects.length,
+    getScrollElement: () => projectPickerScrollRef.current,
+    estimateSize: () => 56,
     overscan: 10,
   })
 
   // Virtualizer: project items list
   const projectItemScrollRef = useRef<HTMLDivElement>(null)
   const projectItemVirtualizer = useVirtualizer({
-    count: projectItems.length,
+    count: filteredProjectItems.length,
     getScrollElement: () => projectItemScrollRef.current,
     estimateSize: () => 48,
     overscan: 10,
@@ -454,10 +549,10 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
             </div>
           </SheetHeader>
 
-          {/* Main tabs: Issues | Projects */}
-          {config?.has_token && !showRepoPicker && !loadingConfig && (
-            <div className="border-b px-6">
-              <Tabs value={activeMainTab} onValueChange={setActiveMainTab}>
+          {/* Main tabs: Issues | Projects + action buttons */}
+          {config?.has_token && !showRepoPicker && !showProjectPicker && !loadingConfig && (
+            <div className="border-b px-6 flex items-center gap-2">
+              <Tabs value={activeMainTab} onValueChange={setActiveMainTab} className="flex-1">
                 <TabsList variant="line">
                   <TabsTrigger value="issues" className="text-xs">
                     Issues
@@ -467,6 +562,29 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
                   </TabsTrigger>
                 </TabsList>
               </Tabs>
+              <TooltipProvider delayDuration={300}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="sm" onClick={fetchRepos} className="shrink-0 h-8 w-8 p-0">
+                      <FolderGit2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="text-xs">Select Repositories</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+              <TooltipProvider delayDuration={300}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="sm" onClick={fetchProjectPicker} className="shrink-0 h-8 w-8 p-0">
+                      <LayoutList className="h-3.5 w-3.5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="text-xs">Select Projects</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+              <Button variant="ghost" size="sm" onClick={handleDisconnect} className="shrink-0 h-8 px-2 text-xs text-muted-foreground hover:text-destructive">
+                Disconnect
+              </Button>
             </div>
           )}
 
@@ -622,23 +740,138 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
                   </Button>
                 </div>
               </div>
-            ) : config.selected_repos.length === 0 ? (
-              /* ── No repos selected ───────────────────────────── */
+            ) : showProjectPicker ? (
+              /* ── Project Picker ──────────────────────────────── */
+              <div className="flex flex-col h-full">
+                <div className="px-6 pt-4 pb-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-medium">Select Projects</h3>
+                    <span className="text-xs text-muted-foreground">
+                      {selectedProjectIds.length} selected
+                    </span>
+                  </div>
+                  {!loadingProjects && allProjects.length > 0 && (
+                    <div className="relative">
+                      <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                      <Input
+                        placeholder="Search projects..."
+                        value={projectFilter}
+                        onChange={e => setProjectFilter(e.target.value)}
+                        className="pl-8 h-8 text-xs"
+                      />
+                    </div>
+                  )}
+                </div>
+                <div className="flex-1 overflow-hidden px-6">
+                  {loadingProjects ? (
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2 text-muted-foreground">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <span className="text-sm">Loading projects...</span>
+                      </div>
+                      {[1, 2, 3, 4, 5].map(i => <Skeleton key={i} className="h-12 w-full" />)}
+                    </div>
+                  ) : filteredPickerProjects.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground text-sm">
+                      {allProjects.length === 0 ? 'No projects found' : 'No matching projects'}
+                    </div>
+                  ) : (
+                    <div ref={projectPickerScrollRef} className="h-full overflow-y-auto">
+                      <div
+                        style={{
+                          height: `${projectPickerVirtualizer.getTotalSize()}px`,
+                          width: '100%',
+                          position: 'relative',
+                        }}
+                      >
+                        {projectPickerVirtualizer.getVirtualItems().map((virtualRow) => {
+                          const project = filteredPickerProjects[virtualRow.index]
+                          if (!project) return null
+                          const isSelected = selectedProjectIds.includes(project.id)
+                          return (
+                            <button
+                              key={project.id}
+                              onClick={() => toggleProject(project.id)}
+                              style={{
+                                position: 'absolute',
+                                top: 0,
+                                left: 0,
+                                width: '100%',
+                                height: `${virtualRow.size}px`,
+                                transform: `translateY(${virtualRow.start}px)`,
+                              }}
+                              className={`w-full flex items-center gap-3 px-3 rounded-lg border text-left transition-colors ${
+                                isSelected
+                                  ? 'border-primary bg-primary/5'
+                                  : 'border-transparent hover:bg-accent'
+                              }`}
+                            >
+                              <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
+                                isSelected
+                                  ? 'bg-primary border-primary text-primary-foreground'
+                                  : 'border-muted-foreground/30'
+                              }`}>
+                                {isSelected && <Check className="h-3 w-3" />}
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="text-sm font-medium truncate">{project.title}</div>
+                                <div className="flex items-center gap-2">
+                                  {project.short_description && (
+                                    <span className="text-xs text-muted-foreground truncate">{project.short_description}</span>
+                                  )}
+                                  <span className="text-[10px] text-muted-foreground shrink-0">{project.owner}</span>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                {project.closed ? (
+                                  <Badge variant="secondary" className="text-[10px] px-1.5 py-0">Closed</Badge>
+                                ) : (
+                                  <Badge variant="outline" className="text-[10px] px-1.5 py-0">Open</Badge>
+                                )}
+                                {project.public ? (
+                                  <Badge variant="outline" className="text-[10px] px-1.5 py-0">Public</Badge>
+                                ) : (
+                                  <Badge variant="secondary" className="text-[10px] px-1.5 py-0">Private</Badge>
+                                )}
+                              </div>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div className="border-t px-6 py-4 flex gap-2">
+                  <Button variant="outline" onClick={() => { setShowProjectPicker(false); setProjectFilter('') }} className="flex-1">
+                    Cancel
+                  </Button>
+                  <Button onClick={handleSaveProjects} className="flex-1">
+                    Save Selection
+                  </Button>
+                </div>
+              </div>
+            ) : config.selected_repos.length === 0 && config.selected_projects.length === 0 ? (
+              /* ── No repos or projects selected ─────────────────── */
               <div className="p-6 space-y-4">
                 <div className="text-center py-8 space-y-2">
                   <Github className="h-8 w-8 mx-auto text-muted-foreground" />
-                  <h3 className="text-sm font-medium">No Repositories Selected</h3>
+                  <h3 className="text-sm font-medium">Select Data Sources</h3>
                   <p className="text-xs text-muted-foreground">
-                    Select which repositories to show issues from.
+                    Choose which repositories and projects to follow.
                   </p>
-                  <div className="flex items-center justify-center gap-2 mt-2">
+                  <div className="flex items-center justify-center gap-2 mt-4">
                     <Button onClick={fetchRepos} variant="outline">
-                      Select Repositories
+                      <FolderGit2 className="h-4 w-4 mr-2" />
+                      Select Repos
                     </Button>
-                    <Button variant="ghost" size="sm" onClick={handleDisconnect} className="text-xs text-muted-foreground hover:text-destructive">
-                      Disconnect
+                    <Button onClick={fetchProjectPicker} variant="outline">
+                      <LayoutList className="h-4 w-4 mr-2" />
+                      Select Projects
                     </Button>
                   </div>
+                  <Button variant="ghost" size="sm" onClick={handleDisconnect} className="text-xs text-muted-foreground hover:text-destructive">
+                    Disconnect
+                  </Button>
                 </div>
               </div>
             ) : activeMainTab === 'issues' && detailIssue ? (
@@ -723,27 +956,18 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
               <div className="flex flex-col h-full">
                 {/* Repo Tabs */}
                 <div className="border-b px-4">
-                  <div className="flex items-center gap-2">
-                    <Tabs
-                      value={activeRepoTab}
-                      onValueChange={setActiveRepoTab}
-                      className="flex-1"
-                    >
-                      <TabsList variant="line" className="w-full overflow-x-auto">
-                        {config.selected_repos.map(repo => (
-                          <TabsTrigger key={repo} value={repo} className="text-xs">
-                            {repo.split('/')[1]}
-                          </TabsTrigger>
-                        ))}
-                      </TabsList>
-                    </Tabs>
-                    <Button variant="ghost" size="sm" onClick={fetchRepos} className="shrink-0 h-8 w-8 p-0">
-                      <RefreshCw className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button variant="ghost" size="sm" onClick={handleDisconnect} className="shrink-0 h-8 px-2 text-xs text-muted-foreground hover:text-destructive">
-                      Disconnect
-                    </Button>
-                  </div>
+                  <Tabs
+                    value={activeRepoTab}
+                    onValueChange={setActiveRepoTab}
+                  >
+                    <TabsList variant="line" className="w-full overflow-x-auto">
+                      {config.selected_repos.map(repo => (
+                        <TabsTrigger key={repo} value={repo} className="text-xs">
+                          {repo.split('/')[1]}
+                        </TabsTrigger>
+                      ))}
+                    </TabsList>
+                  </Tabs>
                 </div>
 
                 {/* Search bar */}
@@ -870,8 +1094,26 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
                   )}
                 </div>
               </div>
-            ) : null}
-            {activeMainTab === 'projects' && config?.has_token && !showRepoPicker && (
+            ) : activeMainTab === 'projects' && config?.has_token && !showRepoPicker && !showProjectPicker && config.selected_projects.length === 0 ? (
+              /* ── No Projects Selected (early) ──────────────────── */
+              <div className="p-6 space-y-4">
+                <div className="text-center py-8 space-y-2">
+                  <LayoutList className="h-8 w-8 mx-auto text-muted-foreground" />
+                  <h3 className="text-sm font-medium">No Projects Selected</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Choose which GitHub Projects to follow.
+                  </p>
+                  <div className="flex items-center justify-center gap-2 mt-2">
+                    <Button onClick={fetchProjectPicker} variant="outline">
+                      Select Projects
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={handleDisconnect} className="text-xs text-muted-foreground hover:text-destructive">
+                      Disconnect
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ) : activeMainTab === 'projects' && config?.has_token && !showRepoPicker && !showProjectPicker ? (
               /* ── Projects View ────────────────────────────────── */
               <div className="flex flex-col h-full">
                 {detailProjectItem ? (
@@ -946,18 +1188,61 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
                       </Button>
                     </div>
                   </div>
-                ) : selectedProject ? (
-                  /* ── Project Items ──────────────────────────── */
-                  <div className="flex flex-col h-full">
-                    <div className="border-b px-6 py-3">
-                      <div className="flex items-center gap-2">
-                        <Button variant="ghost" size="sm" onClick={() => { setSelectedProject(null); setProjectItems([]) }} className="h-7 px-2 text-xs">
-                          ← Back
+                ) : projects.length === 0 && !loadingProjects ? (
+                  /* ── No Projects Selected ────────────────────── */
+                  <div className="p-6 space-y-4">
+                    <div className="text-center py-8 space-y-2">
+                      <LayoutList className="h-8 w-8 mx-auto text-muted-foreground" />
+                      <h3 className="text-sm font-medium">No Projects Selected</h3>
+                      <p className="text-xs text-muted-foreground">
+                        Choose which GitHub Projects to follow.
+                      </p>
+                      <div className="flex items-center justify-center gap-2 mt-2">
+                        <Button onClick={fetchProjectPicker} variant="outline">
+                          Select Projects
                         </Button>
-                        <h3 className="text-sm font-medium">{selectedProject.title}</h3>
-                        <span className="text-xs text-muted-foreground">{projectItems.length} items</span>
+                        <Button variant="ghost" size="sm" onClick={handleDisconnect} className="text-xs text-muted-foreground hover:text-destructive">
+                          Disconnect
+                        </Button>
                       </div>
                     </div>
+                  </div>
+                ) : (
+                  /* ── Project Items (tabbed, matching Issues design) ── */
+                  <div className="flex flex-col h-full">
+                    {/* Project Tabs */}
+                    <div className="border-b px-4">
+                      <Tabs
+                        value={activeProjectTab}
+                        onValueChange={(val) => {
+                          setActiveProjectTab(val)
+                          setProjectItemsFilter('')
+                          setDetailProjectItem(null)
+                        }}
+                      >
+                        <TabsList variant="line" className="w-full overflow-x-auto">
+                          {projects.map(project => (
+                            <TabsTrigger key={project.id} value={project.id} className="text-xs">
+                              {project.title}
+                            </TabsTrigger>
+                          ))}
+                        </TabsList>
+                      </Tabs>
+                    </div>
+
+                    {/* Search bar */}
+                    <div className="px-4 py-2 border-b">
+                      <div className="relative">
+                        <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                        <Input
+                          placeholder="Filter items..."
+                          value={projectItemsFilter}
+                          onChange={e => setProjectItemsFilter(e.target.value)}
+                          className="pl-8 h-8 text-xs"
+                        />
+                      </div>
+                    </div>
+
                     {/* Table header */}
                     <div className="px-4 py-2 border-b bg-muted/30">
                       <div className="grid grid-cols-[1fr_100px_100px_100px] gap-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">
@@ -967,17 +1252,21 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
                         <span>Updated</span>
                       </div>
                     </div>
+
+                    {/* Project Items Table */}
                     <div ref={projectItemScrollRef} className="flex-1 overflow-y-auto">
                       {loadingProjectItems ? (
                         <div className="p-4 space-y-2">
                           {Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-12"><Skeleton className="h-8 w-full" /></div>)}
                         </div>
-                      ) : projectItems.length === 0 ? (
-                        <div className="text-center py-8 text-muted-foreground text-sm">No items in this project</div>
+                      ) : filteredProjectItems.length === 0 ? (
+                        <div className="text-center py-8 text-muted-foreground text-sm">
+                          {projectItemsFilter ? 'No matching items' : 'No items in this project'}
+                        </div>
                       ) : (
                         <div style={{ height: `${projectItemVirtualizer.getTotalSize()}px`, width: '100%', position: 'relative' }}>
                           {projectItemVirtualizer.getVirtualItems().map((virtualRow) => {
-                            const item = projectItems[virtualRow.index]
+                            const item = filteredProjectItems[virtualRow.index]
                             if (!item) return null
                             return (
                               <div
@@ -1000,54 +1289,9 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
                       )}
                     </div>
                   </div>
-                ) : (
-                  /* ── Projects List ──────────────────────────── */
-                  <div className="flex flex-col h-full">
-                    <div className="px-4 py-2 border-b bg-muted/30">
-                      <div className="grid grid-cols-[1fr_80px_80px] gap-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                        <span>Project</span>
-                        <span className="text-center">Visibility</span>
-                        <span>Updated</span>
-                      </div>
-                    </div>
-                    <div ref={projectScrollRef} className="flex-1 overflow-y-auto">
-                      {loadingProjects ? (
-                        <div className="p-4 space-y-2">
-                          {Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-12"><Skeleton className="h-8 w-full" /></div>)}
-                        </div>
-                      ) : projects.length === 0 ? (
-                        <div className="text-center py-8 text-muted-foreground text-sm">No projects found</div>
-                      ) : (
-                        <div style={{ height: `${projectVirtualizer.getTotalSize()}px`, width: '100%', position: 'relative' }}>
-                          {projectVirtualizer.getVirtualItems().map((virtualRow) => {
-                            const project = projects[virtualRow.index]
-                            if (!project) return null
-                            return (
-                              <div
-                                key={project.id}
-                                style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: `${virtualRow.size}px`, transform: `translateY(${virtualRow.start}px)` }}
-                                className="grid grid-cols-[1fr_80px_80px] gap-4 items-center px-4 hover:bg-accent/50 transition-colors border-b border-border/50 cursor-pointer"
-                                onClick={() => setSelectedProject(project)}
-                              >
-                                <div className="min-w-0 flex items-center gap-2">
-                                  <LayoutList className="h-4 w-4 text-muted-foreground shrink-0" />
-                                  <div className="min-w-0">
-                                    <span className="text-sm font-medium truncate block">{project.title}</span>
-                                    {project.short_description && <span className="text-xs text-muted-foreground truncate block">{project.short_description}</span>}
-                                  </div>
-                                </div>
-                                <span className="text-xs text-muted-foreground text-center">{project.public ? 'Public' : 'Private'}</span>
-                                <span className="text-xs text-muted-foreground truncate">{formatTimeAgo(project.updated_at)}</span>
-                              </div>
-                            )
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  </div>
                 )}
               </div>
-            )}
+            ) : null}
           </div>
         </SheetContent>
       </Sheet>

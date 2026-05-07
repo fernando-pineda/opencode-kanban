@@ -131,6 +131,15 @@ function migrateAddGitHubConfigs(): void {
         "[kanban-db] Migration complete: kanban_github_configs table created.",
       );
     }
+    // Add selected_projects column if missing
+    const columns = db
+      .prepare("PRAGMA table_info(kanban_github_configs)")
+      .all() as Array<{ name: string }>;
+    if (!columns.find((c) => c.name === "selected_projects")) {
+      db.exec(
+        `ALTER TABLE kanban_github_configs ADD COLUMN selected_projects TEXT NOT NULL DEFAULT '[]'`,
+      );
+    }
   } catch (err) {
     console.error("[kanban-db] Migration error (non-fatal):", err);
   }
@@ -1475,6 +1484,7 @@ export interface GitHubConfigRow {
   board_id: number;
   github_token: string;
   selected_repos: string; // JSON array string
+  selected_projects: string; // JSON array string of project IDs
   created_at: string;
   updated_at: string;
 }
@@ -1514,6 +1524,20 @@ export function updateGitHubSelectedRepos(
     WHERE board_id = ?
   `,
   ).run(reposJson, boardId);
+}
+
+export function updateGitHubSelectedProjects(
+  boardId: number,
+  selectedProjects: string[],
+): void {
+  const projectsJson = JSON.stringify(selectedProjects);
+  db.prepare(
+    `
+    UPDATE kanban_github_configs
+    SET selected_projects = ?, updated_at = datetime('now')
+    WHERE board_id = ?
+  `,
+  ).run(projectsJson, boardId);
 }
 
 export function deleteGitHubConfig(boardId: number): void {

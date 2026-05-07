@@ -124,6 +124,7 @@ export interface GitHubConfig {
   has_token: boolean;
   token_masked: string;
   selected_repos: string[];
+  selected_projects: string[];
   created_at: string;
   updated_at: string;
 }
