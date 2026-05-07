@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import Database from "better-sqlite3";
-import type { Board, Column, Card, Subtask, AgentLog, BoardFull, Rule, Setting, Epic, EpicSession, Notification } from "./types.js";
+import type { Board, Column, Card, Subtask, AgentLog, BoardFull, Rule, Setting, Epic, EpicSession } from "./types.js";
 export declare function getDb(): Database.Database;
 export declare function getSessionFirstUserMessage(sessionId: string): string;
 export declare function getSessionTokens(sessionId: string): number;
@@ -106,13 +106,5 @@ export declare function updateEpicStatus(epicId: number): void;
 export declare function isMemoriesEnabled(): boolean;
 export declare function getAutoPruneDays(): number;
 export declare function isKeepImportant(): boolean;
-export declare function createNotification(boardId: number, sessionId: string, type: string, title?: string): Notification | null;
-export declare function getNotifications(boardId: number): Notification[];
-export declare function getUnseenNotificationCount(boardId: number): number;
-export declare function getAllUnseenCounts(): Record<number, number>;
-export declare function markNotificationSeen(notificationId: number): boolean;
-export declare function markAllNotificationsSeen(boardId: number): number;
-export declare function markSessionNotificationsSeen(sessionId: string): number;
-export declare function getNotificationBoardForSession(sessionId: string): number | null;
 export declare function closeDb(): void;
 export {};

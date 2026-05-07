@@ -15,7 +15,6 @@ import { Badge } from "@/components/ui/badge";
 interface KanbanCardProps {
   card: CardType;
   onClick?: () => void;
-  hasUnseenNotification?: boolean;
 }
 
 interface TodoItem {
@@ -96,7 +95,6 @@ function priorityDot(priority: string) {
 export default function KanbanCard({
   card,
   onClick,
-  hasUnseenNotification,
 }: KanbanCardProps) {
   const columnName = card.column_name || "";
   const subtasks = card.subtasks || [];
@@ -167,10 +165,6 @@ export default function KanbanCard({
       {...attributes}
       {...listeners}
     >
-      {hasUnseenNotification && !card.is_busy && (
-        <div className="absolute top-3 right-3 w-2 h-2 rounded-full bg-red-500 animate-pulse shadow-[0_0_6px_rgba(239,68,68,0.5)]" />
-      )}
-
       {/* ── Regular session card ── */}
       <div>
         <div className="flex items-start gap-3">

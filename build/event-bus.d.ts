@@ -14,8 +14,6 @@ export declare const EVENT_TYPES: {
     readonly OPENCODE_MESSAGE_PART_UPDATED: "opencode_message_part_updated";
     readonly OPENCODE_MESSAGE_UPDATED: "opencode_message_updated";
     readonly EPIC_UPDATED: "epic_updated";
-    readonly NOTIFICATION_CREATED: "notification_created";
-    readonly NOTIFICATION_SEEN: "notification_seen";
 };
 export type KanbanEvents = (typeof EVENT_TYPES)[keyof typeof EVENT_TYPES];
 export interface KanbanEventPayloads {
@@ -77,16 +75,6 @@ export interface KanbanEventPayloads {
         epic_id: number;
         board_id: number;
         status: string;
-    };
-    notification_created: {
-        notification_id: number;
-        board_id: number;
-        session_id: string;
-        type: string;
-    };
-    notification_seen: {
-        notification_id: number;
-        board_id: number;
     };
 }
 declare class KanbanEventBus extends EventEmitter {

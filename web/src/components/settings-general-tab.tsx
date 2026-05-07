@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
-import { Loader2, RotateCcw, Shrink, ToggleLeft, ToggleRight, Brain, Bell, BellOff, FileText, Save } from "lucide-react";
+import { Loader2, RotateCcw, Shrink, ToggleLeft, ToggleRight, Brain, FileText, Save } from "lucide-react";
 import { toast } from "sonner";
-import { requestNotificationPermission, getNotificationPermissionStatus } from "@/lib/desktop-notifications";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -11,7 +10,6 @@ interface GeneralSettingsData {
   memories_enabled: boolean;
   memories_auto_prune_days: number;
   memories_keep_important: boolean;
-  desktop_notifications_enabled: boolean;
 }
 
 const DEFAULTS: GeneralSettingsData = {
@@ -20,7 +18,6 @@ const DEFAULTS: GeneralSettingsData = {
   memories_enabled: true,
   memories_auto_prune_days: 90,
   memories_keep_important: true,
-  desktop_notifications_enabled: false,
 };
 
 export default function SettingsGeneralTab() {
@@ -67,10 +64,6 @@ export default function SettingsGeneralTab() {
             map.memories_keep_important !== undefined
               ? map.memories_keep_important === "true" || map.memories_keep_important === "1"
               : DEFAULTS.memories_keep_important,
-          desktop_notifications_enabled:
-            map.desktop_notifications_enabled !== undefined
-              ? map.desktop_notifications_enabled === "true" || map.desktop_notifications_enabled === "1"
-              : DEFAULTS.desktop_notifications_enabled,
         });
       } catch (err) {
         toast.error("Failed to load settings");
@@ -110,7 +103,6 @@ export default function SettingsGeneralTab() {
           memories_enabled: String(newSettings.memories_enabled),
           memories_auto_prune_days: String(newSettings.memories_auto_prune_days),
           memories_keep_important: String(newSettings.memories_keep_important),
-          desktop_notifications_enabled: String(newSettings.desktop_notifications_enabled),
         }),
       });
       if (!res.ok) throw new Error(`Failed: ${res.status}`);
@@ -408,61 +400,6 @@ export default function SettingsGeneralTab() {
             </Button>
           </div>
         </div>
-      </div>
-
-      {/* Desktop Notifications Card */}
-      <div className="rounded-lg border bg-card p-4 space-y-4">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            {settings.desktop_notifications_enabled ? (
-              <Bell className="h-4 w-4 text-muted-foreground" />
-            ) : (
-              <BellOff className="h-4 w-4 text-muted-foreground" />
-            )}
-            <span className="text-sm font-semibold">Desktop Notifications</span>
-          </div>
-          <Button
-            variant={settings.desktop_notifications_enabled ? "secondary" : "ghost"}
-            size="icon"
-            onClick={async () => {
-              if (!settings.desktop_notifications_enabled) {
-                const perm = await requestNotificationPermission();
-                if (perm === "granted") {
-                  handleToggle("desktop_notifications_enabled");
-                } else {
-                  toast.error("Notification permission denied. Enable it in your browser settings.");
-                }
-              } else {
-                handleToggle("desktop_notifications_enabled");
-              }
-            }}
-            title={settings.desktop_notifications_enabled ? "Disable" : "Enable"}
-            className="h-8 w-8"
-          >
-            {settings.desktop_notifications_enabled ? (
-              <ToggleRight className="h-3.5 w-3.5" />
-            ) : (
-              <ToggleLeft className="h-3.5 w-3.5" />
-            )}
-          </Button>
-        </div>
-
-        <p className="text-xs text-muted-foreground">
-          Show browser desktop notifications when a task finishes its work
-          iteration. The browser will prompt for permission when you enable this
-          feature.
-        </p>
-
-        {getNotificationPermissionStatus() === "unsupported" && (
-          <p className="text-xs text-amber-500">
-            Your browser does not support desktop notifications.
-          </p>
-        )}
-        {settings.desktop_notifications_enabled && getNotificationPermissionStatus() === "denied" && (
-          <p className="text-xs text-amber-500">
-            Notifications are blocked. Please enable them in your browser settings.
-          </p>
-        )}
       </div>
 
       {/* Info box */}

@@ -5,7 +5,6 @@ import { useDroppable } from "@dnd-kit/core";
 import { Badge } from "@/components/ui/badge";
 import { Column, Card as CardType } from "../types";
 import KanbanCard from "./kanban-card";
-import { useNotifications } from "../hooks/use-notifications";
 
 interface KanbanColumnProps {
   column: Column;
@@ -29,11 +28,9 @@ export default function KanbanColumn({
   overId,
   activeCardId,
 }: KanbanColumnProps) {
-  const { hasUnseenSession, markSessionSeen } = useNotifications();
   const { setNodeRef, isOver } = useDroppable({ id: column.name });
 
   const handleCardClick = (sessionId: string) => {
-    markSessionSeen(sessionId);
     onCardClick?.(sessionId);
   };
 
@@ -86,7 +83,6 @@ export default function KanbanColumn({
               <KanbanCard
                 card={card}
                 onClick={() => handleCardClick(card.session_id)}
-                hasUnseenNotification={hasUnseenSession(card.session_id)}
               />
             </React.Fragment>
           ))}

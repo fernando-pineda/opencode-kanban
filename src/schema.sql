@@ -143,18 +143,3 @@ CREATE INDEX IF NOT EXISTS idx_epics_planner ON kanban_epics(planner_session_id)
 CREATE INDEX IF NOT EXISTS idx_epic_sessions_epic ON kanban_epic_sessions(epic_id);
 CREATE INDEX IF NOT EXISTS idx_epic_sessions_session ON kanban_epic_sessions(session_id);
 CREATE INDEX IF NOT EXISTS idx_task_key_counters_board ON kanban_task_key_counters(board_id);
-
--- Notifications — tracks events (iteration complete, task failed, etc.) per session/board
-CREATE TABLE IF NOT EXISTS kanban_notifications (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  board_id INTEGER NOT NULL REFERENCES kanban_boards(id) ON DELETE CASCADE,
-  session_id TEXT NOT NULL,
-  type TEXT NOT NULL DEFAULT 'iteration_complete' CHECK(type IN ('iteration_complete', 'epic_complete', 'task_failed', 'subtask_complete')),
-  title TEXT NOT NULL DEFAULT '',
-  seen INTEGER NOT NULL DEFAULT 0 CHECK(seen IN (0, 1)),
-  created_at TEXT DEFAULT (datetime('now')),
-  updated_at TEXT DEFAULT (datetime('now'))
-);
-CREATE INDEX IF NOT EXISTS idx_notifications_board ON kanban_notifications(board_id);
-CREATE INDEX IF NOT EXISTS idx_notifications_session ON kanban_notifications(session_id);
-CREATE INDEX IF NOT EXISTS idx_notifications_unseen ON kanban_notifications(board_id, seen);

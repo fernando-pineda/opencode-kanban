@@ -17,8 +17,6 @@ export const EVENT_TYPES = {
   OPENCODE_MESSAGE_PART_UPDATED: 'opencode_message_part_updated',
   OPENCODE_MESSAGE_UPDATED: 'opencode_message_updated',
   EPIC_UPDATED: 'epic_updated',
-  NOTIFICATION_CREATED: 'notification_created',
-  NOTIFICATION_SEEN: 'notification_seen',
 } as const;
 
 export type KanbanEvents = (typeof EVENT_TYPES)[keyof typeof EVENT_TYPES];
@@ -38,8 +36,6 @@ export interface KanbanEventPayloads {
   opencode_message_part_updated: { sessionID: string; part: any };
   opencode_message_updated: { sessionID: string; info: any };
   epic_updated: { epic_id: number; board_id: number; status: string };
-  notification_created: { notification_id: number; board_id: number; session_id: string; type: string };
-  notification_seen: { notification_id: number; board_id: number };
 }
 
 // ── Typed event bus ─────────────────────────────────────────

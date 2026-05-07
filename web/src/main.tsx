@@ -7,7 +7,6 @@ import BoardSidebar from "./components/board-sidebar";
 import TerminalPanel from "./components/terminal-panel";
 import SessionDetail from "./components/session-detail";
 import { useKanban } from "./hooks/use-kanban";
-import { NotificationProvider } from "./hooks/use-notifications";
 
 function App() {
   const {
@@ -70,8 +69,7 @@ function App() {
   };
 
   return (
-    <NotificationProvider activeBoardId={activeBoard?.board.id ?? null}>
-      <SidebarProvider className="h-full overflow-hidden">
+    <SidebarProvider className="h-full overflow-hidden">
         <BoardSidebar
           boards={boards}
           activeBoard={activeBoard?.board ?? null}
@@ -137,7 +135,6 @@ function App() {
         />
 
       </SidebarProvider>
-    </NotificationProvider>
   );
 }
 

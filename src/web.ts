@@ -186,14 +186,6 @@ import {
   deleteSession,
   setSessionCompacting,
   isSessionCompacting,
-  createNotification,
-  getNotifications,
-  getUnseenNotificationCount,
-  getAllUnseenCounts,
-  markNotificationSeen,
-  markAllNotificationsSeen,
-  markSessionNotificationsSeen,
-  getNotificationBoardForSession,
 } from "./db.js";
 import {
   searchMemories,
@@ -1395,72 +1387,6 @@ app.delete("/api/rules/:id", (req: Request, res: Response) => {
 });
 
 
-
-// ── Notifications API ─────────────────────────────────────────
-
-// GET /api/notifications — get all notifications for a board
-app.get("/api/notifications", (req: Request, res: Response) => {
-  try {
-    const boardId = parseInt(req.query.board_id as string, 10);
-    if (!boardId) {
-      return res.status(400).json({ error: "board_id query param is required" });
-    }
-    const notifications = getNotifications(boardId);
-    res.json(notifications);
-  } catch (error) {
-    res.status(500).json({ error: (error as Error).message });
-  }
-});
-
-// GET /api/notifications/unseen-counts — get unseen counts for all boards
-app.get("/api/notifications/unseen-counts", (_req: Request, res: Response) => {
-  try {
-    const counts = getAllUnseenCounts();
-    res.json(counts);
-  } catch (error) {
-    res.status(500).json({ error: (error as Error).message });
-  }
-});
-
-// POST /api/notifications/:id/seen — mark one notification as seen
-app.post("/api/notifications/:id/seen", (req: Request, res: Response) => {
-  try {
-    const notificationId = parseInt(req.params.id, 10);
-    const found = markNotificationSeen(notificationId);
-    if (!found) {
-      return res.status(404).json({ error: "Notification not found" });
-    }
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: (error as Error).message });
-  }
-});
-
-// POST /api/notifications/mark-all-seen — mark all notifications as seen for a board
-app.post("/api/notifications/mark-all-seen", (req: Request, res: Response) => {
-  try {
-    const { board_id } = req.body as { board_id?: number };
-    if (!board_id) {
-      return res.status(400).json({ error: "board_id is required" });
-    }
-    const count = markAllNotificationsSeen(board_id);
-    res.json({ success: true, count });
-  } catch (error) {
-    res.status(500).json({ error: (error as Error).message });
-  }
-});
-
-// POST /api/sessions/:sessionId/notifications/seen — mark all notifications for a session as seen
-app.post("/api/sessions/:sessionId/notifications/seen", (req: Request, res: Response) => {
-  try {
-    const { sessionId } = req.params;
-    const count = markSessionNotificationsSeen(sessionId);
-    res.json({ success: true, count });
-  } catch (error) {
-    res.status(500).json({ error: (error as Error).message });
-  }
-});
-
 // ── Server-Sent Events (SSE) ────────────────────────────────
 
 app.get("/api/events", (req: Request, res: Response) => {
@@ -1933,7 +1859,6 @@ function subscribeToOpencodeEvents() {
                 ) {
                   const sessionID = eventData.properties.sessionID;
                   const currentStatus = eventData.properties.status?.type || eventData.properties.status;
-                  const previousStatus = previousSessionStatuses.get(sessionID);
 
                   bus.emit(
                     "opencode_session_status" as any,
@@ -1942,23 +1867,6 @@ function subscribeToOpencodeEvents() {
                       status: eventData.properties.status,
                     } as any,
                   );
-
-                  // Auto-notification: detect busy/retry → idle transition
-                  if (
-                    previousStatus &&
-                    (previousStatus === "busy" || previousStatus === "retry") &&
-                    currentStatus === "idle"
-                  ) {
-                    try {
-                      const boardId = getNotificationBoardForSession(sessionID);
-                      if (boardId) {
-                        createNotification(boardId, sessionID, "iteration_complete", "");
-                      }
-                    } catch {
-                      // non-critical: notification creation failed
-                    }
-                  }
-                  previousSessionStatuses.set(sessionID, currentStatus);
                 }
                 // Relay streaming message events to frontend via event bus
                 if (eventData.type === "message.part.updated" && eventData.properties?.sessionID) {
@@ -2003,26 +1911,7 @@ function subscribeToOpencodeEvents() {
   }
 }
 
-// Track previous session statuses for auto-notification detection
-const previousSessionStatuses = new Map<string, string>();
-
 subscribeToOpencodeEvents();
-
-// Auto-notification: when a subtask is completed or failed, create a notification
-bus.on("subtask_updated" as any, (payload: any) => {
-  try {
-    const { session_id, status } = payload as { session_id: string; status: string };
-    if (status === "completed" || status === "failed") {
-      const boardId = getNotificationBoardForSession(session_id);
-      if (boardId) {
-        const type = status === "completed" ? "subtask_complete" : "task_failed";
-        createNotification(boardId, session_id, type, "");
-      }
-    }
-  } catch {
-    // non-critical: notification creation failed
-  }
-});
 
 // ── Static Files & SPA Fallback ────────────────────────────
 

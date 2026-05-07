@@ -126,17 +126,6 @@ export interface Setting {
   updated_at: string;
 }
 
-export interface Notification {
-  id: number;
-  board_id: number;
-  session_id: string;
-  type: 'iteration_complete' | 'epic_complete' | 'task_failed' | 'subtask_complete';
-  title: string;
-  seen: boolean;
-  created_at: string;
-  updated_at: string;
-}
-
 // Typed settings keys with defaults
 export interface GeneralSettings {
   auto_compact_enabled: boolean;

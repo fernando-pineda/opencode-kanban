@@ -46,7 +46,6 @@ import {
 } from "@/components/ui/context-menu";
 import { Board } from "../types";
 import { Trash2, Settings, Plus } from "lucide-react";
-import { useNotifications } from "../hooks/use-notifications";
 import SettingsDialog from "./settings-dialog";
 import WorkspacePicker from "./workspace-picker";
 
@@ -69,13 +68,11 @@ const statusColors: Record<string, string> = {
 function SortableBoardItem({
   board,
   isActive,
-  unseenCount,
   onClick,
   onRemove,
 }: {
   board: Board;
   isActive: boolean;
-  unseenCount: number;
   onClick: () => void;
   onRemove: () => void;
 }) {
@@ -110,20 +107,10 @@ function SortableBoardItem({
               {...listeners}
             >
               {board.name.charAt(0).toUpperCase()}
-              {unseenCount > 0 && !isActive && (
-                <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-red-500 flex items-center justify-center text-white text-[7px] font-bold leading-none">
-                  {unseenCount >= 10 ? "9" : unseenCount}
-                </span>
-              )}
             </span>
             <span className="flex-1 min-w-0 group-data-[collapsible=icon]:hidden">
               <div className="font-medium truncate flex items-center gap-2">
                 <span className="truncate">{board.name}</span>
-                {unseenCount > 0 && !isActive && (
-                  <span className="ml-auto flex-shrink-0 flex items-center justify-center min-w-[18px] h-[18px] rounded-full bg-red-500 text-white text-[10px] font-bold px-1">
-                    {unseenCount >= 10 ? "9+" : unseenCount}
-                  </span>
-                )}
               </div>
             </span>
           </SidebarMenuButton>
@@ -152,7 +139,6 @@ export default function BoardSidebar({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState<Board | null>(null);
   const [localBoards, setLocalBoards] = useState(boards);
-  const { unseenCounts, markAllSeen } = useNotifications();
 
   // Sync local boards when prop changes
   useEffect(() => {
@@ -235,11 +221,8 @@ export default function BoardSidebar({
                       key={board.id}
                       board={board}
                       isActive={activeBoard?.id === board.id}
-                      unseenCount={unseenCounts[board.id] || 0}
                       onClick={() => {
                         onSelectBoard(board);
-                        const count = unseenCounts[board.id] || 0;
-                        if (count > 0) markAllSeen(board.id);
                       }}
                       onRemove={() => setConfirmRemove(board)}
                     />

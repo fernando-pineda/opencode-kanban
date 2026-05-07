@@ -15,8 +15,6 @@ export const EVENT_TYPES = {
     OPENCODE_MESSAGE_PART_UPDATED: 'opencode_message_part_updated',
     OPENCODE_MESSAGE_UPDATED: 'opencode_message_updated',
     EPIC_UPDATED: 'epic_updated',
-    NOTIFICATION_CREATED: 'notification_created',
-    NOTIFICATION_SEEN: 'notification_seen',
 };
 // ── Typed event bus ─────────────────────────────────────────
 class KanbanEventBus extends EventEmitter {
