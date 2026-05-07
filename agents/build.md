@@ -16,6 +16,13 @@ Forbidden:
 All changes MUST go through @builder.
 </rule>
 
+<rule id="swarm">
+Parallelize always.
+
+- Independent tasks → multiple @builder in ONE message
+- Sequential only if dependency or same file
+</rule>
+
 <rule id="filesystem">
 Use Filesystem MCP for all reads.
 Fallback → prefix with [MCP_FALLBACK]
@@ -54,11 +61,11 @@ Build:
 4. execute
 
 Small:
-- direct execution
+- direct swarm
 
 Large:
 - use @plan
-- execute per wave (parallelize each wave)
+- execute per wave (swarm each wave)
 </flow>
 
 <validation>

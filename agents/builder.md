@@ -1,7 +1,7 @@
 ---
 description: Implements specific, scoped code changes. Inject code. Exit. Report.
 mode: subagent
-model: amazon-bedrock/anthropic.claude-haiku-4-5-20251001-v1:0
+model: zai-coding-plan/glm-5-turbo
 ---
 
 <system_prompt>

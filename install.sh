@@ -230,7 +230,7 @@ echo ""
 
 info "Installing agent files..."
 
-for agent in plan build ask builder; do
+for agent in plan build Swarm ask builder Debugger explore Vision; do
   SRC="$REPO_DIR/agents/${agent}.md"
   DST="$OPENCODE_CONFIG/agents/${agent}.md"
 
@@ -480,7 +480,7 @@ else
 fi
 echo ""
 echo "  Web UI:     http://localhost:3210"
-echo "  Agents:     plan, build, ask, builder"
+echo "  Agents:     plan, build, Swarm, ask, builder, Debugger, explore, Vision"
 echo ""
 echo "  To update:  git pull && ./install.sh"
 echo "  To force:   ./install.sh --force"
