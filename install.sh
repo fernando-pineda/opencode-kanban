@@ -318,6 +318,7 @@ if [ "$(uname)" = "Darwin" ]; then
   KANBAN_PLIST="$LAUNCHD_DIR/com.opencode-kanban.web.plist"
 
   info "  Generating com.opencode-kanban.web.plist..."
+  NODE_BIN_DIR="$(dirname "$NODE_PATH")"
   cat > "$KANBAN_PLIST" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -327,7 +328,8 @@ if [ "$(uname)" = "Darwin" ]; then
     <string>com.opencode-kanban.web</string>
     <key>ProgramArguments</key>
     <array>
-        <string>${REPO_DIR}/scripts/start-web.sh</string>
+        <string>${NODE_PATH}</string>
+        <string>${REPO_DIR}/build/web.js</string>
     </array>
     <key>WorkingDirectory</key>
     <string>${REPO_DIR}</string>
@@ -348,6 +350,12 @@ if [ "$(uname)" = "Darwin" ]; then
     <dict>
         <key>WEB_PORT</key>
         <string>3210</string>
+        <key>DB_PATH</key>
+        <string>${REPO_DIR}/kanban.db</string>
+        <key>PATH</key>
+        <string>${NODE_BIN_DIR}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>${HOME}</string>
     </dict>
 </dict>
 </plist>
