@@ -36,6 +36,8 @@ import {
   Activity,
   Sparkles,
   MessageCircle,
+  Mic,
+  MicOff,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -59,6 +61,7 @@ import {
 import { Popover as PopoverPrimitive } from "radix-ui";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
+import { useSpeechRecognition } from "@/hooks/use-speech-recognition";
 
 const Popover = PopoverPrimitive.Root;
 const PopoverTrigger = PopoverPrimitive.Trigger;
@@ -1422,6 +1425,25 @@ const ChatInput = memo(function ChatInput({
   const mentionStartRef = useRef<number | null>(null);
   const mentionFilesRef = useRef<FileEntry[]>([]);
 
+  // Speech recognition
+  const {
+    isListening,
+    interimTranscript,
+    supported: speechSupported,
+    error: speechError,
+    startListening,
+    stopListening,
+  } = useSpeechRecognition({
+    lang: undefined, // use browser default
+    onFinalTranscript: (text) => {
+      // Append to existing input
+      setInputValue((prev) => {
+        const separator = prev && !prev.endsWith(" ") && !prev.endsWith("\n") ? " " : "";
+        return prev + separator + text;
+      });
+    },
+  });
+
   const draftKey = useMemo(
     () => getDraftKey(sessionId || null, directory || null),
     [sessionId, directory],
@@ -1456,6 +1478,46 @@ const ChatInput = memo(function ChatInput({
       inputRef.current.focus();
     }
   }, [sending]);
+
+  // Auto-update textarea height when input changes from speech
+  const prevSpeechRef = useRef("");
+  useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.style.height = "auto";
+      inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, MAX_TEXTAREA_HEIGHT)}px`;
+    }
+  }, [inputValue]);
+
+  // Voice dictation toggle: Cmd+I / Ctrl+I
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "i") {
+        e.preventDefault();
+        if (!speechSupported) return;
+        if (isListening) {
+          stopListening();
+        } else {
+          startListening();
+        }
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [speechSupported, isListening, startListening, stopListening]);
+
+  // Show speech error toast
+  useEffect(() => {
+    if (speechError) {
+      toast.error(speechError);
+    }
+  }, [speechError]);
+
+  // Auto-focus textarea when speech starts
+  useEffect(() => {
+    if (isListening && inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, [isListening]);
 
   const handleSend = useCallback(async () => {
     const text = inputValue.trim();
@@ -1611,7 +1673,10 @@ const ChatInput = memo(function ChatInput({
   return (
     <div className="px-4 pt-3 pb-3">
       {/* Input container with all elements inside */}
-      <div className="relative bg-input rounded-md">
+      <div className={cn(
+        "relative bg-input rounded-md",
+        isListening && "ring-2 ring-red-500/50 animate-pulse",
+      )}>
         <textarea
           ref={inputRef}
           value={inputValue}
@@ -1634,6 +1699,13 @@ const ChatInput = memo(function ChatInput({
             isBusy && "pr-10",
           )}
         />
+
+        {/* Interim speech transcript overlay */}
+        {isListening && interimTranscript && (
+          <div className="absolute top-2 left-3 right-3 pointer-events-none text-sm text-muted-foreground/50 italic">
+            {interimTranscript}
+          </div>
+        )}
 
         {/* File mention dropdown */}
         {mentionOpen && directory && (
@@ -1669,7 +1741,7 @@ const ChatInput = memo(function ChatInput({
 
         {/* Bottom bar INSIDE the input container */}
         <div className="flex items-center justify-between px-3 py-2 border-t border-muted-foreground/10 text-xs text-muted-foreground">
-          {/* Left side: agent selector only */}
+          {/* Left side: agent selector + mic */}
           <div className="flex items-center gap-2">
             {agents.length > 0 && (
               <div className="flex items-center gap-1.5">
@@ -1678,6 +1750,44 @@ const ChatInput = memo(function ChatInput({
                   ⇥
                 </kbd>
               </div>
+            )}
+            {speechSupported && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => {
+                      if (isListening) {
+                        stopListening();
+                      } else {
+                        startListening();
+                      }
+                    }}
+                    className={cn(
+                      "flex items-center gap-1.5 text-xs transition-colors",
+                      isListening
+                        ? "text-red-500 hover:text-red-600"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {isListening ? (
+                      <>
+                        <MicOff className="w-3.5 h-3.5" />
+                        <span className="text-[10px] animate-pulse">Listening...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Mic className="w-3.5 h-3.5" />
+                        <kbd className="inline-flex items-center justify-center h-5 px-1 rounded border border-muted-foreground/30 bg-muted/20 text-[10px] font-mono">
+                          ⌘I
+                        </kbd>
+                      </>
+                    )}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top" sideOffset={6} className="text-xs">
+                  {isListening ? "Stop dictation" : "Start voice dictation"}
+                </TooltipContent>
+              </Tooltip>
             )}
           </div>
 
