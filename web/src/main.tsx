@@ -7,6 +7,8 @@ import BoardSidebar from "./components/board-sidebar";
 import TerminalPanel from "./components/terminal-panel";
 import SessionDetail from "./components/session-detail";
 import { useKanban } from "./hooks/use-kanban";
+import { Toaster } from "@/components/ui/sonner";
+import { useVersionCheck } from "./hooks/use-version-check";
 
 function App() {
   const {
@@ -19,6 +21,7 @@ function App() {
     connectionStatus,
     isLoading,
   } = useKanban();
+  useVersionCheck();
   const [terminalOpenMap, setTerminalOpenMap] = useState<
     Record<number, boolean>
   >({});
@@ -134,6 +137,7 @@ function App() {
           boardId={activeBoard?.board.id ?? null}
         />
 
+        <Toaster />
       </SidebarProvider>
   );
 }

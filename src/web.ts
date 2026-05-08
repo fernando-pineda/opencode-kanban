@@ -2415,6 +2415,81 @@ function subscribeToOpencodeEvents() {
 
 subscribeToOpencodeEvents();
 
+// ── Version Check Endpoint ─────────────────────────────────
+
+let latestReleaseCache: { data: any; timestamp: number } | null = null;
+const RELEASE_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+const GITHUB_REPO = "fernando-pineda/opencode-kanban";
+
+function compareSemver(a: string, b: string): number {
+  const parse = (v: string) => v.replace(/^v/, "").split(".").map(Number);
+  const pa = parse(a);
+  const pb = parse(b);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) > (pb[i] || 0)) return 1;
+    if ((pa[i] || 0) < (pb[i] || 0)) return -1;
+  }
+  return 0;
+}
+
+app.get("/api/version", async (_req: Request, res: Response) => {
+  try {
+    const pkgPath = path.join(__dirname, "..", "package.json");
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+    const currentVersion = pkg.version;
+
+    let latestRelease: any = null;
+
+    if (
+      latestReleaseCache &&
+      Date.now() - latestReleaseCache.timestamp < RELEASE_CACHE_TTL
+    ) {
+      latestRelease = latestReleaseCache.data;
+    } else {
+      try {
+        const githubUrl = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
+        const response = await fetch(githubUrl, {
+          headers: { "User-Agent": "opencode-kanban" },
+        });
+        if (response.ok) {
+          latestRelease = await response.json();
+          latestReleaseCache = {
+            data: latestRelease,
+            timestamp: Date.now(),
+          };
+        }
+      } catch {
+        // GitHub API unavailable — continue with null latestRelease
+      }
+    }
+
+    if (latestRelease && latestRelease.tag_name) {
+      const latestVersion = latestRelease.tag_name;
+      res.json({
+        current: currentVersion,
+        latest: latestVersion,
+        updateAvailable: compareSemver(latestVersion, currentVersion) > 0,
+        releaseUrl: latestRelease.html_url,
+        releaseName: latestRelease.name,
+      });
+    } else {
+      res.json({
+        current: currentVersion,
+        latest: null,
+        updateAvailable: false,
+        error: "Failed to fetch latest release",
+      });
+    }
+  } catch {
+    res.json({
+      current: "unknown",
+      latest: null,
+      updateAvailable: false,
+      error: "Failed to read version info",
+    });
+  }
+});
+
 // ── Static Files & SPA Fallback ────────────────────────────
 
 const distPath = path.join(__dirname, "..", "dist", "web");
