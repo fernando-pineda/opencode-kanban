@@ -33,43 +33,6 @@ export interface Card {
   // Computed column placement
   column_name: string;
   // Populated by getBoardFull
-  subtasks?: Subtask[];
-  agent_logs?: AgentLog[];
-}
-
-export interface Subtask {
-  id: number;
-  session_id: string;
-  agent_name: string;
-  agent_type: "primary" | "subagent";
-  title: string;
-  repository: string;
-  worktree: string;
-  status:
-    | "pending"
-    | "dispatched"
-    | "started"
-    | "progress"
-    | "completed"
-    | "failed"
-    | "escalated";
-  progress: number;
-  details: string;
-  result_summary: string;
-  created_at: string;
-  updated_at: string;
-  completed_at: string | null;
-}
-
-export interface AgentLog {
-  id: number;
-  session_id: string;
-  subtask_id: number | null;
-  agent_name: string;
-  agent_type: "primary" | "subagent";
-  action: string;
-  details: string;
-  timestamp: string;
 }
 
 export interface BoardFull {

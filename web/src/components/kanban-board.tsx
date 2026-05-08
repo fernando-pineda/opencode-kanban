@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback, useEffect, useMemo } from "react";
+import React, { useState, useCallback, useMemo } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -12,7 +12,7 @@ import {
   type DragEndEvent,
   type DragOverEvent,
 } from "@dnd-kit/core";
-import { BoardFull, Card, TodoItem } from "../types";
+import { BoardFull, Card } from "../types";
 import KanbanColumn from "./kanban-column";
 import MemoriesSheet from "./memories-sheet";
 import GithubSheet from "./github-sheet";
@@ -45,7 +45,6 @@ export default function KanbanBoard({
   const [activeCard, setActiveCard] = useState<Card | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [cardTodos, setCardTodos] = useState<Record<string, TodoItem[]>>({});
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -55,45 +54,6 @@ export default function KanbanBoard({
       },
     }),
   );
-
-  // Stable dependency for the todos fetch effect (array reference changes every render)
-  const cardIds = board.cards.map((c) => c.session_id).join(",");
-
-  // Fetch todos for all cards when the board changes (needed for search filtering)
-  useEffect(() => {
-    if (!board.cards.length) return;
-    let cancelled = false;
-
-    const fetchAllTodos = async () => {
-      const results = await Promise.allSettled(
-        board.cards.map(async (card) => {
-          const res = await fetch(
-            `/api/opencode/session/${card.session_id}/todo`,
-          );
-          if (!res.ok) return { session_id: card.session_id, todos: [] };
-          const data = await res.json();
-          return {
-            session_id: card.session_id,
-            todos: Array.isArray(data) ? data : [],
-          };
-        }),
-      );
-
-      if (cancelled) return;
-      const next: Record<string, TodoItem[]> = {};
-      for (const r of results) {
-        if (r.status === "fulfilled") {
-          next[r.value.session_id] = r.value.todos;
-        }
-      }
-      setCardTodos(next);
-    };
-
-    fetchAllTodos();
-    return () => {
-      cancelled = true;
-    };
-  }, [cardIds]);
 
   const handleDragStart = useCallback(
     (event: DragStartEvent) => {
@@ -168,18 +128,9 @@ export default function KanbanBoard({
       if (card.title.toLowerCase().includes(q)) return true;
       // Match card description
       if (card.description?.toLowerCase().includes(q)) return true;
-      // Match subtask title or agent_name
-      if (card.subtasks?.some(
-        (st) =>
-          st.title.toLowerCase().includes(q) ||
-          st.agent_name.toLowerCase().includes(q),
-      )) return true;
-      // Match todo content (from fetched todos)
-      const todos = cardTodos[card.session_id];
-      if (todos?.some((t) => t.content.toLowerCase().includes(q))) return true;
       return false;
     });
-  }, [board.cards, searchQuery, cardTodos]);
+  }, [board.cards, searchQuery]);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -201,7 +152,6 @@ export default function KanbanBoard({
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="h-7 w-44 text-xs border-0 shadow-none focus-visible:ring-0 bg-accent/50"
               />
-
             </div>
             {[
               {
@@ -234,8 +184,18 @@ export default function KanbanBoard({
                   >
                     {customIcon ? (
                       <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none">
-                        <rect x="2" y="2" width="20" height="20" rx="4" fill="#5E6AD2" />
-                        <path d="M8 7h2.5l3 5.5V7H16v10h-2.5l-3-5.5V17H8V7z" fill="white" />
+                        <rect
+                          x="2"
+                          y="2"
+                          width="20"
+                          height="20"
+                          rx="4"
+                          fill="#5E6AD2"
+                        />
+                        <path
+                          d="M8 7h2.5l3 5.5V7H16v10h-2.5l-3-5.5V17H8V7z"
+                          fill="white"
+                        />
                       </svg>
                     ) : Icon ? (
                       <Icon className="h-5 w-5" />

@@ -164,12 +164,6 @@ import {
   reorderBoards,
   moveSessionToColumn,
   searchCards,
-  getSubtasks,
-  createSubtask,
-  updateSubtask,
-  deleteSubtask,
-  addAgentLog,
-  getAgentLogs,
   getDistinctRepos,
   markSessionCompleted,
   unmarkSessionCompleted,
@@ -1653,108 +1647,6 @@ app.get("/api/cards/search", (req: Request, res: Response) => {
 
     const results = searchCards(boardId, query);
     res.json(results);
-  } catch (error) {
-    res.status(400).json({ error: (error as Error).message });
-  }
-});
-
-// Subtasks
-app.get("/api/sessions/:sessionId/subtasks", (req: Request, res: Response) => {
-  try {
-    const { sessionId } = req.params;
-    const subtasks = getSubtasks(sessionId);
-    res.json(subtasks);
-  } catch (error) {
-    res.status(400).json({ error: (error as Error).message });
-  }
-});
-
-app.post("/api/sessions/:sessionId/subtasks", (req: Request, res: Response) => {
-  try {
-    const { sessionId } = req.params;
-    const { agent_name, agent_type, title, repository, worktree } = req.body;
-
-    if (!agent_name || !agent_type) {
-      return res
-        .status(400)
-        .json({ error: "agent_name and agent_type are required" });
-    }
-
-    const subtask = createSubtask(
-      sessionId,
-      agent_name,
-      agent_type,
-      title || "",
-      repository || "",
-      worktree || "",
-    );
-    res.json(subtask);
-  } catch (error) {
-    res.status(400).json({ error: (error as Error).message });
-  }
-});
-
-app.patch("/api/subtasks/:id", (req: Request, res: Response) => {
-  try {
-    const subtaskId = parseInt(req.params.id, 10);
-    const { status, progress, details, result_summary } = req.body;
-
-    const updated = updateSubtask(subtaskId, {
-      status,
-      progress,
-      details,
-      result_summary,
-    });
-    if (!updated) {
-      return res.status(404).json({ error: "Subtask not found" });
-    }
-    res.json(updated);
-  } catch (error) {
-    res.status(400).json({ error: (error as Error).message });
-  }
-});
-
-app.delete("/api/subtasks/:id", (req: Request, res: Response) => {
-  try {
-    const subtaskId = parseInt(req.params.id, 10);
-    deleteSubtask(subtaskId);
-    res.json({ success: true });
-  } catch (error) {
-    res.status(400).json({ error: (error as Error).message });
-  }
-});
-
-// Agent logs
-app.get("/api/sessions/:sessionId/logs", (req: Request, res: Response) => {
-  try {
-    const { sessionId } = req.params;
-    const logs = getAgentLogs(sessionId);
-    res.json(logs);
-  } catch (error) {
-    res.status(400).json({ error: (error as Error).message });
-  }
-});
-
-app.post("/api/sessions/:sessionId/logs", (req: Request, res: Response) => {
-  try {
-    const { sessionId } = req.params;
-    const { agent_name, agent_type, action, details, subtask_id } = req.body;
-
-    if (!agent_name || !agent_type || !action) {
-      return res
-        .status(400)
-        .json({ error: "agent_name, agent_type, and action are required" });
-    }
-
-    const log = addAgentLog(
-      sessionId,
-      agent_name,
-      agent_type,
-      action,
-      details || "",
-      subtask_id,
-    );
-    res.json(log);
   } catch (error) {
     res.status(400).json({ error: (error as Error).message });
   }

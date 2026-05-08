@@ -8,9 +8,6 @@ export const EVENT_TYPES = {
   CARD_UPDATED: "card_updated",
   CARD_CREATED: "card_created",
   CARD_DELETED: "card_deleted",
-  SUBTASK_CREATED: "subtask_created",
-  SUBTASK_UPDATED: "subtask_updated",
-  AGENT_LOG_ADDED: "agent_log_added",
   SESSION_STARTED: "session_started",
   SESSION_ENDED: "session_ended",
   OPENCODE_SESSION_STATUS: "opencode_session_status",
@@ -28,9 +25,6 @@ export interface KanbanEventPayloads {
   card_updated: { session_id: string; progress: number; status_note?: string };
   card_created: { session_id: string; board_id: number };
   card_deleted: { session_id: string };
-  subtask_created: { session_id: string; agent_name: string };
-  subtask_updated: { session_id: string; status: string; progress: number };
-  agent_log_added: { session_id: string; agent_name: string; action: string };
   session_started: { session_id: number; board_id: number };
   session_ended: { session_id: number };
   opencode_session_status: { sessionID: string; status: { type: string } };

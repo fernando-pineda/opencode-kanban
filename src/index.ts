@@ -14,12 +14,6 @@ import {
   reorderBoards,
   moveSessionToColumn,
   searchCards,
-  createSubtask,
-  updateSubtask,
-  getSubtasks,
-  deleteSubtask,
-  addAgentLog,
-  getAgentLogs,
   getDistinctRepos,
   getBoardFull,
   markSessionCompleted,
@@ -140,108 +134,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           board_id: { type: "number", description: "Board ID to limit search" },
         },
         required: ["query", "board_id"],
-      },
-    },
-
-    // ── Subtask tools ────────────────────────────────────────
-    {
-      name: "kanban_create_subtask",
-      description: "Create a subtask for a session assigned to an agent.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          session_id: { type: "string", description: "Session ID" },
-          agent_name: { type: "string", description: "Agent name" },
-          agent_type: {
-            type: "string",
-            enum: ["primary", "subagent"],
-            description: "Agent type",
-          },
-          title: { type: "string", description: "Optional subtask title" },
-          repository: {
-            type: "string",
-            description: "Optional repository path",
-          },
-          worktree: { type: "string", description: "Optional worktree name" },
-        },
-        required: ["session_id", "agent_name", "agent_type"],
-      },
-    },
-    {
-      name: "kanban_update_subtask",
-      description: "Update subtask status, progress, details, or result.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          subtask_id: { type: "number", description: "Subtask ID" },
-          status: {
-            type: "string",
-            enum: [
-              "pending",
-              "dispatched",
-              "started",
-              "progress",
-              "completed",
-              "failed",
-              "escalated",
-            ],
-            description: "New status",
-          },
-          progress: {
-            type: "number",
-            description: "Progress percentage (0-100)",
-          },
-          details: { type: "string", description: "Work details" },
-          result_summary: { type: "string", description: "Result summary" },
-        },
-        required: ["subtask_id"],
-      },
-    },
-    {
-      name: "kanban_get_subtasks",
-      description: "Get all subtasks for a session.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          session_id: { type: "string", description: "Session ID" },
-        },
-        required: ["session_id"],
-      },
-    },
-
-    // ── Agent log tools ────────────────────────────────────────
-    {
-      name: "kanban_add_agent_log",
-      description: "Log an agent action on a session.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          session_id: { type: "string", description: "Session ID" },
-          agent_name: { type: "string", description: "Agent name" },
-          agent_type: {
-            type: "string",
-            enum: ["primary", "subagent"],
-            description: "Agent type",
-          },
-          action: { type: "string", description: "Action description" },
-          details: { type: "string", description: "Optional action details" },
-          subtask_id: {
-            type: "number",
-            description: "Optional associated subtask ID",
-          },
-        },
-        required: ["session_id", "agent_name", "agent_type", "action"],
-      },
-    },
-    {
-      name: "kanban_get_agent_log",
-      description: "Get all agent logs for a session.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          session_id: { type: "string", description: "Session ID" },
-        },
-        required: ["session_id"],
       },
     },
 
@@ -575,74 +467,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      // ── Subtask tools ────────────────────────────────────────
-      case "kanban_create_subtask": {
-        const subtask = createSubtask(
-          params.session_id as string,
-          params.agent_name as string,
-          params.agent_type as string,
-          (params.title as string) || "",
-          (params.repository as string) || "",
-          (params.worktree as string) || "",
-        );
-        return { content: [{ type: "text", text: JSON.stringify(subtask) }] };
-      }
-
-      case "kanban_update_subtask": {
-        const subtask = updateSubtask(params.subtask_id as number, {
-          status: params.status as string | undefined,
-          progress: params.progress as number | undefined,
-          details: params.details as string | undefined,
-          result_summary: params.result_summary as string | undefined,
-        });
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(subtask || { error: "Subtask not found" }),
-            },
-          ],
-        };
-      }
-
-      case "kanban_get_subtasks": {
-        const subtasks = getSubtasks(params.session_id as string);
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({ count: subtasks.length, subtasks }),
-            },
-          ],
-        };
-      }
-
-      // ── Agent log tools ────────────────────────────────────────
-      case "kanban_add_agent_log": {
-        const log = addAgentLog(
-          params.session_id as string,
-          params.agent_name as string,
-          params.agent_type as string,
-          params.action as string,
-          (params.details as string) || "",
-          params.subtask_id as number | undefined,
-        );
-        return { content: [{ type: "text", text: JSON.stringify(log) }] };
-      }
-
-      case "kanban_get_agent_log": {
-        const logs = getAgentLogs(params.session_id as string);
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({ count: logs.length, logs }),
-            },
-          ],
-        };
-      }
-
-       // ── Repos tool ────────────────────────────────────────
+      // ── Repos tool ────────────────────────────────────────
        case "kanban_get_repos": {
          const repos = getDistinctRepos();
          return {

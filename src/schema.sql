@@ -1,3 +1,7 @@
+-- Cleanup: drop deprecated subtask and agent_log tables
+DROP TABLE IF EXISTS kanban_agent_logs;
+DROP TABLE IF EXISTS kanban_subtasks;
+
 -- Kanban boards — ONE per environment/folder, auto-created
 CREATE TABLE IF NOT EXISTS kanban_boards (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,41 +42,7 @@ CREATE TABLE IF NOT EXISTS kanban_deleted_sessions (
   deleted_at TEXT DEFAULT (datetime('now'))
 );
 
--- Kanban subtasks — agent tracking within a session, grouped by repository/worktree
-CREATE TABLE IF NOT EXISTS kanban_subtasks (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id TEXT NOT NULL,
-  agent_name TEXT NOT NULL,
-  agent_type TEXT NOT NULL CHECK(agent_type IN ('primary', 'subagent')),
-  title TEXT NOT NULL DEFAULT '',
-  repository TEXT NOT NULL DEFAULT '',
-  worktree TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'dispatched', 'started', 'progress', 'completed', 'failed', 'escalated')),
-  progress INTEGER NOT NULL DEFAULT 0,
-  details TEXT DEFAULT '',
-  result_summary TEXT DEFAULT '',
-  created_at TEXT DEFAULT (datetime('now')),
-  updated_at TEXT DEFAULT (datetime('now')),
-  completed_at TEXT
-);
-
--- Kanban agent logs — audit trail per session
-CREATE TABLE IF NOT EXISTS kanban_agent_logs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id TEXT NOT NULL,
-  subtask_id INTEGER REFERENCES kanban_subtasks(id) ON DELETE SET NULL,
-  agent_name TEXT NOT NULL,
-  agent_type TEXT NOT NULL CHECK(agent_type IN ('primary', 'subagent')),
-  action TEXT NOT NULL,
-  details TEXT DEFAULT '',
-  timestamp TEXT DEFAULT (datetime('now'))
-);
-
 -- Indexes
-CREATE INDEX IF NOT EXISTS idx_kanban_subtasks_session ON kanban_subtasks(session_id);
-CREATE INDEX IF NOT EXISTS idx_kanban_subtasks_repo ON kanban_subtasks(session_id, repository);
-CREATE INDEX IF NOT EXISTS idx_kanban_logs_session ON kanban_agent_logs(session_id);
-CREATE INDEX IF NOT EXISTS idx_kanban_logs_subtask ON kanban_agent_logs(subtask_id);
 CREATE INDEX IF NOT EXISTS idx_kanban_boards_repo ON kanban_boards(repo_path);
 CREATE INDEX IF NOT EXISTS idx_kanban_boards_status ON kanban_boards(status);
 CREATE INDEX IF NOT EXISTS idx_kanban_completed_session ON kanban_completed(session_id);

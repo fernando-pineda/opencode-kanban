@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useCallback } from "react";
 import { Card as CardType } from "../types";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
@@ -8,9 +8,7 @@ import {
   CheckCircle2,
   Circle,
   Database,
-  ListTodo,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 
 interface KanbanCardProps {
   card: CardType;
@@ -18,19 +16,7 @@ interface KanbanCardProps {
   searchQuery?: string;
 }
 
-interface TodoItem {
-  content: string;
-  status: "pending" | "in_progress" | "completed";
-  priority: "high" | "medium" | "low";
-}
-
-function HighlightText({
-  text,
-  query,
-}: {
-  text: string;
-  query?: string;
-}) {
+function HighlightText({ text, query }: { text: string; query?: string }) {
   if (!query || !query.trim()) return <>{text}</>;
   const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const regex = new RegExp(`(${escaped})`, "gi");
@@ -98,38 +84,12 @@ function StatusIcon({
   return <Circle className="h-4 w-4 text-muted-foreground flex-shrink-0" />;
 }
 
-function todoStatusIcon(status: string) {
-  switch (status) {
-    case "completed":
-      return <CheckCircle2 className="w-3 h-3 text-green-500 shrink-0" />;
-    case "in_progress":
-      return (
-        <Loader2 className="w-3 h-3 text-blue-500 animate-spin shrink-0" />
-      );
-    default:
-      return <Circle className="w-3 h-3 text-muted-foreground/40 shrink-0" />;
-  }
-}
-
-function priorityDot(priority: string) {
-  const color =
-    priority === "high"
-      ? "text-red-500"
-      : priority === "medium"
-        ? "text-yellow-500"
-        : "text-muted-foreground";
-  const symbol = priority === "high" ? "●" : priority === "medium" ? "◑" : "○";
-  return <span className={`text-[10px] shrink-0 ${color}`}>{symbol}</span>;
-}
-
 export default function KanbanCard({
   card,
   onClick,
   searchQuery,
 }: KanbanCardProps) {
   const columnName = card.column_name || "";
-  const subtasks = card.subtasks || [];
-  const [todos, setTodos] = useState<TodoItem[]>([]);
 
   const {
     attributes,
@@ -156,37 +116,6 @@ export default function KanbanCard({
     opacity: isDragging ? 0.3 : 1,
   };
 
-  // Fetch todos from opencode API — poll to stay in sync with agent updates
-  useEffect(() => {
-    let cancelled = false;
-    const fetchTodos = () => {
-      fetch(`/api/opencode/session/${card.session_id}/todo`)
-        .then((res) => (res.ok ? res.json() : []))
-        .then((data) => {
-          if (!cancelled) setTodos(Array.isArray(data) ? data : []);
-        })
-        .catch(() => {});
-    };
-    // Initial fetch
-    fetchTodos();
-    // Poll: faster when busy (agent actively working), slower when idle
-    const interval = setInterval(fetchTodos, card.is_busy ? 3000 : 10000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [card.session_id, card.is_busy]);
-
-  const todoDone = todos.filter((t) => t.status === "completed").length;
-
-  // Group subtasks by repository
-  const grouped: Record<string, typeof subtasks> = {};
-  for (const st of subtasks) {
-    const key = st.repository || "unknown";
-    if (!grouped[key]) grouped[key] = [];
-    grouped[key].push(st);
-  }
-
   return (
     <div
       ref={combinedRef}
@@ -211,90 +140,6 @@ export default function KanbanCard({
               </div>
             </div>
 
-            {/* Full TODO list */}
-            {todos.length > 0 && (
-              <div className="mt-2">
-                <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-1.5">
-                  <ListTodo className="w-3 h-3" />
-                  <span>Todos</span>
-                  <span className="text-muted-foreground/70 ml-1">
-                    {todoDone}/{todos.length}
-                  </span>
-                  {todoDone === todos.length && (
-                    <CheckCircle2 className="w-2.5 h-2.5 text-green-500" />
-                  )}
-                </div>
-                <div className="space-y-1">
-                  {todos.map((todo, i) => (
-                    <div
-                      key={i}
-                      className={`flex items-center gap-1.5 text-[11px] ${
-                        todo.status === "completed"
-                          ? "text-muted-foreground line-through"
-                          : ""
-                      }`}
-                    >
-                      {todoStatusIcon(todo.status)}
-                      <span
-                        className={`flex-1 min-w-0 line-clamp-1 leading-snug ${
-                          todo.status === "in_progress"
-                            ? "font-medium text-foreground"
-                            : ""
-                        }`}
-                      >
-                        <HighlightText
-                          text={todo.content}
-                          query={searchQuery}
-                        />
-                      </span>
-                      {priorityDot(todo.priority)}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {subtasks.length > 0 && (
-              <div className="mt-2">
-                <div className="text-[10px] uppercase tracking-wider text-foreground font-medium mb-1 mt-4">
-                  Subtasks
-                </div>
-                <div className="space-y-3">
-                  {Object.entries(grouped).map(([repo, tasks]) => (
-                    <div key={repo}>
-                      <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-1.5 flex items-center gap-1.5">
-                        <span className="w-1 bg-muted-foreground/30 flex-shrink-0 self-stretch rounded-full" />
-                        {repo}
-                      </div>
-                      <div className="space-y-1.5 pl-2">
-                        {tasks.map((subtask) => (
-                          <div
-                            key={subtask.id}
-                            className="text-xs text-muted-foreground flex items-start gap-1.5"
-                          >
-                            <span className="w-1 bg-muted-foreground/30 flex-shrink-0 self-stretch rounded-full" />
-                            <div className="flex flex-col">
-                              <span className="text-foreground font-semibold">
-                                <HighlightText
-                                  text={subtask.agent_name}
-                                  query={searchQuery}
-                                />
-                              </span>
-                              <span className="text-foreground/80">
-                                <HighlightText
-                                  text={subtask.title}
-                                  query={searchQuery}
-                                />
-                              </span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         </div>
 

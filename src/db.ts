@@ -9,8 +9,6 @@ import type {
   Board,
   Column,
   Card,
-  Subtask,
-  AgentLog,
   BoardFull,
   Rule,
   Setting,
@@ -512,181 +510,6 @@ export function searchCards(boardId: number, query: string): Card[] {
   return cards;
 }
 
-// ── Subtask functions ───────────────────────────────────────
-
-export function createSubtask(
-  sessionId: string,
-  agentName: string,
-  agentType: string,
-  title: string = "",
-  repository: string = "",
-  worktree: string = "",
-): Subtask {
-  const now = new Date().toISOString();
-  const result = db
-    .prepare(
-      "INSERT INTO kanban_subtasks (session_id, agent_name, agent_type, title, repository, worktree, status, progress, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)",
-    )
-    .run(
-      sessionId,
-      agentName,
-      agentType,
-      title,
-      repository,
-      worktree,
-      now,
-      now,
-    );
-
-  const subtaskId = Number(result.lastInsertRowid);
-  const subtask: Subtask = {
-    id: subtaskId,
-    session_id: sessionId,
-    agent_name: agentName,
-    agent_type: agentType as Subtask["agent_type"],
-    title,
-    repository,
-    worktree,
-    status: "pending",
-    progress: 0,
-    details: "",
-    result_summary: "",
-    created_at: now,
-    updated_at: now,
-    completed_at: null,
-  };
-
-  emitBoardChange("subtask_created", {
-    session_id: sessionId,
-    agent_name: agentName,
-  });
-  return subtask;
-}
-
-export function updateSubtask(
-  subtaskId: number,
-  data: {
-    status?: string;
-    progress?: number;
-    details?: string;
-    result_summary?: string;
-  },
-): Subtask | null {
-  const subtask = db
-    .prepare("SELECT * FROM kanban_subtasks WHERE id = ?")
-    .get(subtaskId) as Subtask | undefined;
-  if (!subtask) return null;
-
-  const sets: string[] = [];
-  const values: any[] = [];
-
-  if (data.status !== undefined) {
-    sets.push("status = ?");
-    values.push(data.status);
-    if (data.status === "completed" || data.status === "failed") {
-      sets.push("completed_at = ?");
-      values.push(new Date().toISOString());
-    }
-  }
-  if (data.progress !== undefined) {
-    sets.push("progress = ?");
-    values.push(data.progress);
-  }
-  if (data.details !== undefined) {
-    sets.push("details = ?");
-    values.push(data.details);
-  }
-  if (data.result_summary !== undefined) {
-    sets.push("result_summary = ?");
-    values.push(data.result_summary);
-  }
-
-  if (sets.length === 0) return subtask;
-
-  sets.push("updated_at = ?");
-  values.push(new Date().toISOString());
-  values.push(subtaskId);
-
-  db.prepare(`UPDATE kanban_subtasks SET ${sets.join(", ")} WHERE id = ?`).run(
-    ...values,
-  );
-
-  emitBoardChange("subtask_updated", {
-    session_id: subtask.session_id,
-    status: data.status || subtask.status,
-    progress: data.progress ?? subtask.progress,
-  });
-
-  return (
-    (db.prepare("SELECT * FROM kanban_subtasks WHERE id = ?").get(subtaskId) as
-      | Subtask
-      | undefined) || null
-  );
-}
-
-export function getSubtasks(sessionId: string): Subtask[] {
-  return db
-    .prepare(
-      "SELECT * FROM kanban_subtasks WHERE session_id = ? ORDER BY repository, worktree, created_at",
-    )
-    .all(sessionId) as Subtask[];
-}
-
-export function deleteSubtask(subtaskId: number): void {
-  db.prepare("DELETE FROM kanban_subtasks WHERE id = ?").run(subtaskId);
-}
-
-// ── Agent log functions ─────────────────────────────────────
-
-export function addAgentLog(
-  sessionId: string,
-  agentName: string,
-  agentType: string,
-  action: string,
-  details: string = "",
-  subtaskId?: number,
-): AgentLog {
-  const result = db
-    .prepare(
-      "INSERT INTO kanban_agent_logs (session_id, subtask_id, agent_name, agent_type, action, details, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    )
-    .run(
-      sessionId,
-      subtaskId ?? null,
-      agentName,
-      agentType,
-      action,
-      details,
-      new Date().toISOString(),
-    );
-
-  const log: AgentLog = {
-    id: Number(result.lastInsertRowid),
-    session_id: sessionId,
-    subtask_id: subtaskId ?? null,
-    agent_name: agentName,
-    agent_type: agentType as AgentLog["agent_type"],
-    action,
-    details,
-    timestamp: new Date().toISOString(),
-  };
-
-  emitBoardChange("agent_log_added", {
-    session_id: sessionId,
-    agent_name: agentName,
-    action,
-  });
-  return log;
-}
-
-export function getAgentLogs(sessionId: string): AgentLog[] {
-  return db
-    .prepare(
-      "SELECT * FROM kanban_agent_logs WHERE session_id = ? ORDER BY timestamp",
-    )
-    .all(sessionId) as AgentLog[];
-}
-
 // ── Full board retrieval ────────────────────────────────────
 
 export function getBoardFull(boardId: number): BoardFull {
@@ -749,15 +572,7 @@ export function getBoardFull(boardId: number): BoardFull {
       time_created: new Date(session.time_created).toISOString(),
       time_updated: new Date(session.time_updated).toISOString(),
       column_name: columnName,
-      subtasks: [],
-      agent_logs: [],
     });
-  }
-
-  // Attach subtasks and logs to each card
-  for (const card of cards) {
-    card.subtasks = getSubtasks(card.session_id);
-    card.agent_logs = getAgentLogs(card.session_id);
   }
 
   return { board, columns, cards };
@@ -1145,10 +960,6 @@ export function deleteSession(sessionId: string): void {
     sessionId,
   );
   db.prepare("DELETE FROM kanban_session_columns WHERE session_id = ?").run(
-    sessionId,
-  );
-  db.prepare("DELETE FROM kanban_subtasks WHERE session_id = ?").run(sessionId);
-  db.prepare("DELETE FROM kanban_agent_logs WHERE session_id = ?").run(
     sessionId,
   );
   emitBoardChange("card_deleted", { session_id: sessionId });
