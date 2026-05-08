@@ -25,6 +25,8 @@ export function useKanban(): UseKanbanReturn {
   const [isLoading, setIsLoading] = useState(true)
   const [reconnectCounter, setReconnectCounter] = useState(0)
   const eventSourceRef = useRef<EventSource | null>(null)
+  // Sequence counter to discard stale fetch results (race condition guard)
+  const fetchSeqRef = useRef(0)
 
   // Fetch all boards (preserves has_busy from current state since the list API doesn't include it)
   const fetchBoards = useCallback(async () => {
@@ -43,15 +45,19 @@ export function useKanban(): UseKanbanReturn {
     }
   }, [])
 
-  // Fetch full board
+  // Fetch full board — uses sequence counter to discard stale results
   const fetchBoardFull = useCallback(async (boardId: number) => {
+    const seq = ++fetchSeqRef.current
     try {
       const res = await fetch(`${API_BASE}/api/boards/${boardId}`)
       const data = await res.json()
-      setActiveBoard(data)
-      // Propagate has_busy to boards list for sidebar spinner indicator
-      if (data.board) {
-        setBoards(prev => prev.map(b => b.id === data.board.id ? { ...b, has_busy: data.board.has_busy } : b))
+      // Only apply if this is still the most recent fetch
+      if (seq === fetchSeqRef.current) {
+        setActiveBoard(data)
+        // Propagate has_busy to boards list for sidebar spinner indicator
+        if (data.board) {
+          setBoards(prev => prev.map(b => b.id === data.board.id ? { ...b, has_busy: data.board.has_busy } : b))
+        }
       }
     } catch (err) {
       console.error('Failed to fetch board:', err)

@@ -200,3 +200,63 @@ export interface GitHubProjectItem {
   updated_at: string;
   status: string;
 }
+
+// ── Linear integration types ─────────────────────────────────────
+
+export interface LinearConfig {
+  board_id: number;
+  has_token: boolean;
+  token_masked: string;
+  selected_teams: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LinearTeam {
+  id: string;
+  key: string;
+  name: string;
+  description: string | null;
+  icon: string | null;
+  color: string | null;
+}
+
+export interface LinearLabel {
+  id: string;
+  name: string;
+  color: string;
+}
+
+export interface LinearUser {
+  id: string;
+  name: string;
+  display_name: string | null;
+  avatar_url: string | null;
+}
+
+export interface LinearState {
+  id: string;
+  name: string;
+  color: string;
+  type: string;
+}
+
+export interface LinearIssue {
+  id: string;
+  identifier: string;
+  title: string;
+  description: string | null;
+  url: string;
+  priority: number;
+  priority_label: string;
+  state: LinearState;
+  labels: LinearLabel[];
+  assignee: LinearUser | null;
+  team: LinearTeam;
+  teamId: string;
+  project: { name: string } | null;
+  branch_name: string | null;
+  due_date: string | null;
+  created_at: string;
+  updated_at: string;
+}

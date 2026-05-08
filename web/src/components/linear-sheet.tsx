@@ -45,6 +45,7 @@ import type {
   LinearConfig,
   LinearTeam,
   LinearIssue,
+  LinearLabel,
 } from '../types'
 
 // ── Props ────────────────────────────────────────────────────────
@@ -363,7 +364,7 @@ export default function LinearSheet({ boardId, open, onOpenChange }: LinearSheet
     if (issuesFilter) {
       return i.title.toLowerCase().includes(issuesFilter.toLowerCase()) ||
         i.identifier.toLowerCase().includes(issuesFilter.toLowerCase()) ||
-        i.labels.some(l => l.name.toLowerCase().includes(issuesFilter.toLowerCase()))
+        i.labels.some((l: LinearLabel) => l.name.toLowerCase().includes(issuesFilter.toLowerCase()))
     }
     return true
   })
@@ -642,7 +643,7 @@ export default function LinearSheet({ boardId, open, onOpenChange }: LinearSheet
                     >
                       {detailIssue.priority_label}
                     </Badge>
-                    {detailIssue.labels.map(label => (
+                    {detailIssue.labels.map((label: LinearLabel) => (
                       <Badge
                         key={label.id}
                         className="text-[10px] px-1.5 py-0 border-0"
@@ -737,7 +738,7 @@ export default function LinearSheet({ boardId, open, onOpenChange }: LinearSheet
                     }}
                   >
                     <TabsList variant="line" className="w-full overflow-x-auto">
-                      {config.selected_teams.map(teamId => {
+                      {config.selected_teams.map((teamId: string) => {
                         const team = teams.find(t => t.id === teamId)
                         return (
                           <TabsTrigger key={teamId} value={teamId} className="text-xs">
@@ -878,7 +879,7 @@ export default function LinearSheet({ boardId, open, onOpenChange }: LinearSheet
                               <span className="text-sm truncate">{issue.title}</span>
                               {issue.labels.length > 0 && (
                                 <div className="flex items-center gap-1 shrink-0">
-                                  {issue.labels.slice(0, 2).map(label => (
+                                  {issue.labels.slice(0, 2).map((label: LinearLabel) => (
                                     <Badge
                                       key={label.id}
                                       className="text-[10px] px-1.5 py-0 border-0"

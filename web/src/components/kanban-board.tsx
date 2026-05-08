@@ -237,9 +237,9 @@ export default function KanbanBoard({
                         <rect x="2" y="2" width="20" height="20" rx="4" fill="#5E6AD2" />
                         <path d="M8 7h2.5l3 5.5V7H16v10h-2.5l-3-5.5V17H8V7z" fill="white" />
                       </svg>
-                    ) : (
+                    ) : Icon ? (
                       <Icon className="h-5 w-5" />
-                    )}
+                    ) : null}
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="text-xs">

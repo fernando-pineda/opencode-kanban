@@ -967,7 +967,7 @@ export default function GithubSheet({ boardId, open, onOpenChange }: GithubSheet
                     <div className="flex items-center gap-1 mt-2">
                       <span className="text-xs text-muted-foreground">Assignees:</span>
                       {detailIssue.assignees.map(a => (
-                        <Badge key={a.id} variant="outline" className="text-[10px] px-1.5 py-0">{a.login}</Badge>
+                        <Badge key={a.login} variant="outline" className="text-[10px] px-1.5 py-0">{a.login}</Badge>
                       ))}
                     </div>
                   )}

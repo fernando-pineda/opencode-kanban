@@ -123,7 +123,7 @@ function AgentCard({ agent, content, fileExists, isDirty, isSaving, canDelete, i
       {confirmDelete && (
         <div
           className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50"
-          onPointerDownOutside={(e) => e.preventDefault()}
+
         >
           <div className="bg-popover text-popover-foreground rounded-lg border p-4 shadow-lg max-w-sm mx-4 space-y-3">
             <h3 className="font-semibold text-sm">Delete agent</h3>
