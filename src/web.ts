@@ -2331,11 +2331,16 @@ function connectToOpencodeSSE(directory: string) {
                   eventData.type === "message.part.updated" &&
                   eventData.properties?.sessionID
                 ) {
+                  const part = eventData.properties.part;
+                  // Strip <mandatory> blocks from text parts before relaying to frontend
+                  if (part?.text && typeof part.text === "string") {
+                    part.text = part.text.replace(/<mandatory>[\s\S]*?<\/mandatory>\s*/g, "").trim();
+                  }
                   bus.emit(
                     "opencode_message_part_updated" as any,
                     {
                       sessionID: eventData.properties.sessionID,
-                      part: eventData.properties.part,
+                      part: part,
                     } as any,
                   );
                 }

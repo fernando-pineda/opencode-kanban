@@ -1067,9 +1067,7 @@ const MessageRow = memo(function MessageRow({
                 ) : (
                   <MarkdownContent
                     content={
-                      msg.role === "user"
-                        ? stripSwarmPlanTags(stripMandatoryTags(msg.text))
-                        : stripSwarmPlanTags(msg.text || "")
+                      stripSwarmPlanTags(stripMandatoryTags(msg.text))
                     }
                     className={cn(
                       msg.role === "user" &&
@@ -2833,7 +2831,7 @@ export default function SessionDetail({
                     : prev.model?.modelID || null,
                 agent: eventData?.agent || part?.agent || null,
                 time_created: Date.now() / 1000,
-                text: part.type === "text" ? part.text || "" : "",
+                text: part.type === "text" ? stripMandatoryTags(part.text) : "",
                 reasoning: "",
                 tool_calls:
                   part.type === "tool"
@@ -2854,7 +2852,7 @@ export default function SessionDetail({
             } else {
               const updated = { ...lastMsg };
               if (part.type === "text" && part.text !== undefined) {
-                updated.text = part.text;
+                updated.text = stripMandatoryTags(part.text);
               } else if (part.type === "tool" && part.callID) {
                 const toolCalls = [...(updated.tool_calls || [])];
                 const idx = toolCalls.findIndex(
