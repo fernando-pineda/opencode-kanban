@@ -2040,37 +2040,59 @@ export default function SessionDetail({
     }
   }, [activeChildId, sessionId]);
 
-  // Fetch last N messages (all messages for child sessions)
-  const fetchMessages = useCallback(async (sid: string) => {
-    setLoading(true);
-    setError(null);
+  // Fetch session statuses
+  const fetchStatuses = useCallback(async (dir?: string | null) => {
     try {
-      // Get total count first
-      const countRes = await fetch(
-        `/api/sessions/${sid}/messages?limit=0&offset=0`,
+      const statusDir = dir || sessionDirRef.current;
+      const res = await fetch(
+        `/api/opencode/session/status` +
+          (statusDir ? `?directory=${encodeURIComponent(statusDir)}` : ""),
       );
-      if (!countRes.ok) throw new Error(`Failed: ${countRes.status}`);
-      const countData = await countRes.json();
-      totalRef.current = countData.total;
-
-      // Child sessions: show all messages (no limit). Parent: show last N.
-      const isChild = sid !== sessionIdRef.current;
-      const limit = isChild ? countData.total : LAST_N;
-      const offset = isChild ? 0 : Math.max(0, countData.total - LAST_N);
-      const msgRes = await fetch(
-        `/api/sessions/${sid}/messages?limit=${limit}&offset=${offset}`,
-      );
-      if (!msgRes.ok) throw new Error(`Failed: ${msgRes.status}`);
-      const msgData = await msgRes.json();
-      sessionDirRef.current = msgData.directory;
-      setData(msgData);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error");
-      setData(null);
-    } finally {
-      setLoading(false);
+      if (res.ok) {
+        const data = await res.json();
+        setSessionStatuses(data);
+      }
+    } catch {
+      // status fetch is non-critical
     }
   }, []);
+
+  // Fetch last N messages (all messages for child sessions)
+  const fetchMessages = useCallback(
+    async (sid: string) => {
+      setLoading(true);
+      setError(null);
+      try {
+        // Get total count first
+        const countRes = await fetch(
+          `/api/sessions/${sid}/messages?limit=0&offset=0`,
+        );
+        if (!countRes.ok) throw new Error(`Failed: ${countRes.status}`);
+        const countData = await countRes.json();
+        totalRef.current = countData.total;
+
+        // Child sessions: show all messages (no limit). Parent: show last N.
+        const isChild = sid !== sessionIdRef.current;
+        const limit = isChild ? countData.total : LAST_N;
+        const offset = isChild ? 0 : Math.max(0, countData.total - LAST_N);
+        const msgRes = await fetch(
+          `/api/sessions/${sid}/messages?limit=${limit}&offset=${offset}`,
+        );
+        if (!msgRes.ok) throw new Error(`Failed: ${msgRes.status}`);
+        const msgData = await msgRes.json();
+        sessionDirRef.current = msgData.directory;
+        setData(msgData);
+        // Fetch statuses now that we have the directory
+        fetchStatuses(msgData.directory);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Unknown error");
+        setData(null);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [fetchStatuses],
+  );
 
   // Load older messages (pagination)
   const loadOlderMessages = useCallback(async () => {
@@ -2231,19 +2253,6 @@ export default function SessionDetail({
     }
   }, []);
 
-  // Fetch session statuses
-  const fetchStatuses = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/opencode/session/status`);
-      if (res.ok) {
-        const data = await res.json();
-        setSessionStatuses(data);
-      }
-    } catch {
-      // status fetch is non-critical
-    }
-  }, []);
-
   // Initial load — delayed until after sheet animation completes
   useEffect(() => {
     if (!open || (!sessionId && !newSessionDirectory)) {
@@ -2276,11 +2285,8 @@ export default function SessionDetail({
       fetchMessages(activeSessionId);
       fetchTodos(activeSessionId);
 
-      // Only fetch children and statuses for the parent session
-      if (!activeChildId) {
-        fetchChildren(sessionId);
-        fetchStatuses();
-      }
+      fetchChildren(sessionId);
+      fetchStatuses();
     }, 250);
 
     return () => clearTimeout(timer);

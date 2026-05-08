@@ -889,10 +889,83 @@ app.post(
 // ── REST API Routes ─────────────────────────────────────────
 
 // Boards
-app.get("/api/boards", (req: Request, res: Response) => {
+app.get("/api/boards", async (req: Request, res: Response) => {
   try {
     const repoPath = req.query.repo_path as string | undefined;
     const boards = listBoards(repoPath);
+
+    if (boards.length === 0) {
+      res.json(boards);
+      return;
+    }
+
+    try {
+      // Collect unique repo_paths across boards
+      const uniqueRepoPaths = [
+        ...new Set(boards.map((b) => b.repo_path).filter(Boolean)),
+      ];
+
+      // Fetch session statuses for each repo_path in parallel
+      const statusByRepoPath = new Map<
+        string,
+        Record<string, { type: string }>
+      >();
+
+      await Promise.all(
+        uniqueRepoPaths.map(async (rp) => {
+          try {
+            const statusUrl = new URL(`${OPENCODE_SERVER}/session/status`);
+            statusUrl.searchParams.set("directory", rp);
+            const statusRes = await fetch(statusUrl.toString());
+            if (statusRes.ok) {
+              statusByRepoPath.set(
+                rp,
+                (await statusRes.json()) as Record<string, { type: string }>,
+              );
+            }
+          } catch {
+            // Per-repo status fetch is non-critical
+          }
+        }),
+      );
+
+      // Get all active sessions from DB (same query as getBoardFull)
+      const allSessions = getDb()
+        .prepare(
+          "SELECT id, directory FROM session WHERE parent_id IS NULL AND id NOT IN (SELECT session_id FROM kanban_deleted_sessions)",
+        )
+        .all() as { id: string; directory: string }[];
+
+      // Build a lookup: repo_path -> Set of busy session IDs
+      const busySessionsByRepoPath = new Map<string, Set<string>>();
+
+      for (const rp of uniqueRepoPaths) {
+        const statuses = statusByRepoPath.get(rp);
+        if (!statuses) continue;
+
+        const busySet = new Set<string>();
+        for (const session of allSessions) {
+          if (
+            (session.directory === rp ||
+              session.directory.startsWith(rp + "/")) &&
+            (statuses[session.id]?.type === "busy" ||
+              statuses[session.id]?.type === "retry")
+          ) {
+            busySet.add(session.id);
+          }
+        }
+        busySessionsByRepoPath.set(rp, busySet);
+      }
+
+      // Set has_busy on each board
+      for (const board of boards) {
+        const busySet = busySessionsByRepoPath.get(board.repo_path);
+        board.has_busy = busySet !== undefined && busySet.size > 0;
+      }
+    } catch {
+      // Status computation is non-critical; boards keep has_busy undefined
+    }
+
     res.json(boards);
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });

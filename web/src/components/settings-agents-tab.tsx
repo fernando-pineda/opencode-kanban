@@ -49,7 +49,7 @@ function AgentCard({ agent, content, fileExists, isDirty, isSaving, canDelete, i
             <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
             <span className="text-sm font-semibold capitalize">{agent.name}</span>
             <Badge variant={agent.mode === "primary" ? "secondary" : "outline"}>
-              {agent.mode === "primary" ? "Primary" : "Subagent"}
+              {agent.mode === "primary" ? "Primary" : agent.mode === "all" ? "All" : "Subagent"}
             </Badge>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
@@ -601,7 +601,7 @@ export function useAgentsData() {
 
   const visibleAgents = agents.filter((a) => a.hidden !== true && !hiddenAgents.includes(a.name));
   const primaryAgents = visibleAgents.filter((a) => a.mode === "primary");
-  const subagents = visibleAgents.filter((a) => a.mode === "subagent");
+  const subagents = visibleAgents.filter((a) => a.mode === "subagent" || a.mode === "all");
 
   return {
     loading,
