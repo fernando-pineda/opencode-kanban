@@ -1688,7 +1688,7 @@ const ChatInput = memo(function ChatInput({
           onBlur={() => {
             setTimeout(() => setMentionOpen(false), 150);
           }}
-          placeholder="Send a message…"
+          placeholder={isListening ? "" : "Send a message…"}
           rows={1}
           autoComplete="off"
           autoCorrect="off"

@@ -170,13 +170,17 @@ export function useSpeechRecognition(
 
       // Fire the callback with the final accumulated transcript,
       // then reset for the next dictation session.
-      queueMicrotask(() => {
-        if (onFinalTranscriptRef.current) {
-          onFinalTranscriptRef.current(transcriptRef.current)
-        }
-        transcriptRef.current = ""
-        setTranscript("")
-      })
+      // Snapshot and clear immediately to prevent double-fire if onend
+      // triggers more than once (common with Chrome's continuous mode).
+      const finalText = transcriptRef.current
+      transcriptRef.current = ""
+      setTranscript("")
+
+      if (finalText && onFinalTranscriptRef.current) {
+        queueMicrotask(() => {
+          onFinalTranscriptRef.current?.(finalText)
+        })
+      }
     }
 
     try {
