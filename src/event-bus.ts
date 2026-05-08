@@ -1,22 +1,23 @@
-import { EventEmitter } from 'events';
+import { EventEmitter } from "events";
 
 // ── Event type definitions ──────────────────────────────────
 
 export const EVENT_TYPES = {
-  BOARD_UPDATED: 'board_updated',
-  CARD_MOVED: 'card_moved',
-  CARD_UPDATED: 'card_updated',
-  CARD_CREATED: 'card_created',
-  CARD_DELETED: 'card_deleted',
-  SUBTASK_CREATED: 'subtask_created',
-  SUBTASK_UPDATED: 'subtask_updated',
-  AGENT_LOG_ADDED: 'agent_log_added',
-  SESSION_STARTED: 'session_started',
-  SESSION_ENDED: 'session_ended',
-  OPENCODE_SESSION_STATUS: 'opencode_session_status',
-  OPENCODE_MESSAGE_PART_UPDATED: 'opencode_message_part_updated',
-  OPENCODE_MESSAGE_UPDATED: 'opencode_message_updated',
-  EPIC_UPDATED: 'epic_updated',
+  BOARD_UPDATED: "board_updated",
+  CARD_MOVED: "card_moved",
+  CARD_UPDATED: "card_updated",
+  CARD_CREATED: "card_created",
+  CARD_DELETED: "card_deleted",
+  SUBTASK_CREATED: "subtask_created",
+  SUBTASK_UPDATED: "subtask_updated",
+  AGENT_LOG_ADDED: "agent_log_added",
+  SESSION_STARTED: "session_started",
+  SESSION_ENDED: "session_ended",
+  OPENCODE_SESSION_STATUS: "opencode_session_status",
+  OPENCODE_MESSAGE_PART_UPDATED: "opencode_message_part_updated",
+  OPENCODE_MESSAGE_UPDATED: "opencode_message_updated",
+  OPENCODE_MESSAGE_PART_DELTA: "opencode_message_part_delta",
+  EPIC_UPDATED: "epic_updated",
 } as const;
 
 export type KanbanEvents = (typeof EVENT_TYPES)[keyof typeof EVENT_TYPES];
@@ -35,13 +36,23 @@ export interface KanbanEventPayloads {
   opencode_session_status: { sessionID: string; status: { type: string } };
   opencode_message_part_updated: { sessionID: string; part: any };
   opencode_message_updated: { sessionID: string; info: any };
+  opencode_message_part_delta: {
+    sessionID: string;
+    messageID: string;
+    partID: string;
+    field: string;
+    delta: string;
+  };
   epic_updated: { epic_id: number; board_id: number; status: string };
 }
 
 // ── Typed event bus ─────────────────────────────────────────
 
 class KanbanEventBus extends EventEmitter {
-  emit<E extends KanbanEvents>(event: E, payload: KanbanEventPayloads[E]): boolean {
+  emit<E extends KanbanEvents>(
+    event: E,
+    payload: KanbanEventPayloads[E],
+  ): boolean {
     return super.emit(event, payload);
   }
 
@@ -70,7 +81,7 @@ class KanbanEventBus extends EventEmitter {
 // ── Singleton instance ──────────────────────────────────────
 
 export const bus = new KanbanEventBus();
-// Allow many concurrent SSE clients (each registers ~14 event listeners)
+// Allow many concurrent SSE clients (each registers ~15 event listeners)
 bus.setMaxListeners(50);
 
 // ── Convenience function ────────────────────────────────────

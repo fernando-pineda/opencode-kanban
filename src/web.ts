@@ -183,7 +183,6 @@ import {
   getAllSettings,
   getSetting,
   setSetting,
-
   getSessionModel,
   deleteSession,
   setSessionCompacting,
@@ -1016,6 +1015,8 @@ app.post("/api/boards/get-or-create", (req: Request, res: Response) => {
       return res.status(400).json({ error: "repo_path is required" });
     }
     const board = getOrCreateBoard(repo_path);
+    // Subscribe to SSE for new board's workspace
+    connectToOpencodeSSE(repo_path);
     res.json(board);
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
@@ -1488,9 +1489,7 @@ app.get(
           .json({ error: "Linear not configured for this board" });
       }
 
-      const selectedTeams: string[] = JSON.parse(
-        config.selected_teams || "[]",
-      );
+      const selectedTeams: string[] = JSON.parse(config.selected_teams || "[]");
       if (selectedTeams.length === 0) {
         return res.json({ issues: [], teams: [] });
       }
@@ -2397,10 +2396,14 @@ function safeParseSSELine(line: string): any | null {
   return null;
 }
 
-function subscribeToOpencodeEvents() {
-  // We need to subscribe to the SSE stream per-workspace (directory).
-  // Subscribe to each active board's workspace and relay all events.
-  const connect = (directory: string) => {
+// Track directories we've already connected to
+const connectedDirectories = new Set<string>();
+
+function connectToOpencodeSSE(directory: string) {
+  if (!directory || connectedDirectories.has(directory)) return;
+  connectedDirectories.add(directory);
+
+  const connect = () => {
     try {
       const url = new URL(`${OPENCODE_SERVER}/event`);
       if (directory) url.searchParams.set("directory", directory);
@@ -2456,6 +2459,22 @@ function subscribeToOpencodeEvents() {
                     } as any,
                   );
                 }
+                // Relay incremental text deltas for efficient streaming
+                if (
+                  eventData.type === "message.part.delta" &&
+                  eventData.properties?.sessionID
+                ) {
+                  bus.emit(
+                    "opencode_message_part_delta" as any,
+                    {
+                      sessionID: eventData.properties.sessionID,
+                      messageID: eventData.properties.messageID,
+                      partID: eventData.properties.partID,
+                      field: eventData.properties.field,
+                      delta: eventData.properties.delta,
+                    } as any,
+                  );
+                }
               } catch {
                 // ignore parse errors
               }
@@ -2463,23 +2482,27 @@ function subscribeToOpencodeEvents() {
           }
         });
         upstreamRes.on("end", () => {
-          setTimeout(() => connect(directory), 3000);
+          setTimeout(connect, 3000);
         });
       });
       req.on("error", () => {
-        setTimeout(() => connect(directory), 5000);
+        setTimeout(connect, 5000);
       });
       req.end();
     } catch {
-      setTimeout(() => connect(directory), 5000);
+      setTimeout(connect, 5000);
     }
   };
 
+  connect();
+}
+
+function subscribeToOpencodeEvents() {
   // Connect for each active board's workspace
   try {
     const boards = listBoards();
     for (const board of boards) {
-      if (board.repo_path) connect(board.repo_path);
+      if (board.repo_path) connectToOpencodeSSE(board.repo_path);
     }
   } catch {
     // retry later

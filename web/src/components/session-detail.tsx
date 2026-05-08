@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useState,
   useRef,
   useCallback,
@@ -1861,8 +1862,11 @@ export default function SessionDetail({
   const waitingForResponseRef = useRef(false);
   const isNearBottom = useRef(true);
   const shouldAutoScroll = useRef(false);
+  const [showScrollButton, setShowScrollButton] = useState(false);
+
   const sessionIdRef = useRef<string | null>(sessionId);
   const dataRef = useRef<SessionData | null>(null);
+  const sessionCache = useRef<Map<string, SessionData>>(new Map());
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -1902,9 +1906,17 @@ export default function SessionDetail({
     sessionIdRef.current = sessionId;
   }, [sessionId]);
 
-  // Keep dataRef in sync
+  // Keep dataRef and cache in sync
   useEffect(() => {
     dataRef.current = data;
+    if (data) {
+      sessionCache.current.set(data.session_id, data);
+      // Evict oldest entries if cache grows too large
+      if (sessionCache.current.size > 10) {
+        const firstKey = sessionCache.current.keys().next().value;
+        if (firstKey) sessionCache.current.delete(firstKey);
+      }
+    }
   }, [data]);
 
   // Resize handle
@@ -2001,6 +2013,7 @@ export default function SessionDetail({
         waitingForResponseRef.current = true;
         shouldAutoScroll.current = true;
         isNearBottom.current = true;
+        setShowScrollButton(false);
       } catch (err) {
         console.error("Failed to send message:", err);
         setSending(false);
@@ -2060,7 +2073,10 @@ export default function SessionDetail({
   // Fetch last N messages (all messages for child sessions)
   const fetchMessages = useCallback(
     async (sid: string) => {
-      setLoading(true);
+      // Only show loading skeleton if we don't already have cached data
+      if (!sessionCache.current.has(sid)) {
+        setLoading(true);
+      }
       setError(null);
       try {
         // Get total count first
@@ -2082,6 +2098,8 @@ export default function SessionDetail({
         const msgData = await msgRes.json();
         sessionDirRef.current = msgData.directory;
         setData(msgData);
+        // Update cache
+        sessionCache.current.set(sid, msgData);
         // Fetch statuses now that we have the directory
         fetchStatuses(msgData.directory);
       } catch (err) {
@@ -2256,12 +2274,11 @@ export default function SessionDetail({
   // Initial load — delayed until after sheet animation completes
   useEffect(() => {
     if (!open || (!sessionId && !newSessionDirectory)) {
-      setData(null);
-      setError(null);
+      // Don't clear data on close — keep cached data so reopening is instant.
+      // Only reset auxiliary state.
       setTodos([]);
       setChildren([]);
       setSessionStatuses({});
-      totalRef.current = 0;
       setActiveChildId(null);
       return;
     }
@@ -2271,17 +2288,38 @@ export default function SessionDetail({
       return;
     }
 
-    // Show skeleton immediately while the sheet animation plays
-    setLoading(true);
+    const activeSessionId = activeChildId || sessionId;
+
+    // Check cache — if we have data for this session, show it instantly
+    const cached = sessionCache.current.get(activeSessionId);
+    if (cached) {
+      // Restore cached data immediately — no skeleton flash
+      setData(cached);
+      totalRef.current = cached.total;
+      setLoading(false);
+      setError(null);
+      // Reset scroll tracking for the restored session
+      isNearBottom.current = true;
+      shouldAutoScroll.current = false;
+      hasScrolledToBottomRef.current = false;
+    } else {
+      // No cache for this session — clear old data and show skeleton
+      setData(null);
+      setError(null);
+      totalRef.current = 0;
+      setLoading(true);
+    }
 
     // Delay fetches until after the 200ms slide-in animation finishes
     const timer = setTimeout(() => {
       // Reset scroll tracking so auto-scroll-to-bottom fires for the new session
       prevMessageCountRef.current = 0;
-      isNearBottom.current = true;
-      shouldAutoScroll.current = false;
+      if (!cached) {
+        isNearBottom.current = true;
+        shouldAutoScroll.current = false;
+        hasScrolledToBottomRef.current = false;
+      }
 
-      const activeSessionId = activeChildId || sessionId;
       fetchMessages(activeSessionId);
       fetchTodos(activeSessionId);
 
@@ -2405,11 +2443,13 @@ export default function SessionDetail({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Track scroll position for isNearBottom
+  // Track scroll position for isNearBottom + scroll-to-bottom button
   const handleScroll = useCallback(() => {
     if (!scrollRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
-    isNearBottom.current = scrollHeight - scrollTop - clientHeight < 150;
+    const nearBottom = scrollHeight - scrollTop - clientHeight < 150;
+    isNearBottom.current = nearBottom;
+    setShowScrollButton(!nearBottom && scrollHeight > clientHeight + 300);
   }, []);
 
   // Compute isBusy at component level (not inside useEffect)
@@ -2447,7 +2487,8 @@ export default function SessionDetail({
     );
   }, [data]);
 
-  // Setup virtualizer
+  // Setup virtualizer — use scrollToOffset on mount to start at bottom
+  const hasScrolledToBottomRef = useRef(false);
   const virtualizer = useVirtualizer({
     count: visibleMessages.length,
     getScrollElement: () => scrollRef.current,
@@ -2458,39 +2499,49 @@ export default function SessionDetail({
         ? (element) => element?.getBoundingClientRect().height
         : undefined,
     overscan: 5,
+    // Start scrolled to bottom: set offset to huge value, clamps to max scroll
+    initialOffset: visibleMessages.length > 0 ? Number.MAX_SAFE_INTEGER : 0,
   });
 
-  // Auto-scroll to bottom
+  // Mark that we've done the initial bottom scroll (via initialOffset)
+  // after the virtualizer has actually rendered the items.
+  useLayoutEffect(() => {
+    if (visibleMessages.length > 0 && !hasScrolledToBottomRef.current) {
+      hasScrolledToBottomRef.current = true;
+    }
+  }, [visibleMessages.length]);
+
+  // Auto-scroll to bottom during streaming and new messages
+  // Derive a streaming key that changes when the last message's text grows
+  const lastMsgTextLen = data && data.messages.length > 0
+    ? data.messages[data.messages.length - 1].text?.length ?? 0
+    : 0;
+  const msgCount = data?.messages.length ?? 0;
+
   useEffect(() => {
     if (!data || !scrollRef.current) return;
-
-    const currentMessageCount = data.messages.length;
+    // Skip the initial mount scroll — handled by initialOffset above
+    if (!hasScrolledToBottomRef.current) return;
 
     // Determine if we should auto-scroll:
     // 1. Always scroll if user explicitly sent a message (shouldAutoScroll flag)
-    // 2. Or scroll if new message arrives AND user is near bottom
+    // 2. Or scroll if user is near bottom (covers new messages AND streaming text updates)
     const shouldScroll =
-      shouldAutoScroll.current ||
-      (currentMessageCount !== prevMessageCountRef.current &&
-        isNearBottom.current);
-
-    prevMessageCountRef.current = currentMessageCount;
+      shouldAutoScroll.current || isNearBottom.current;
 
     if (shouldScroll) {
       shouldAutoScroll.current = false; // Reset flag after use
-      // Double rAF: first lets the virtualizer render + ResizeObserver measure,
-      // second scrolls to the now-measured position.
       const lastIdx = visibleMessages.length - 1;
       if (lastIdx >= 0) {
         requestAnimationFrame(() => {
-          virtualizer.scrollToIndex(lastIdx, { align: "end" });
-          requestAnimationFrame(() => {
-            virtualizer.scrollToIndex(lastIdx, { align: "end" });
+          virtualizer.scrollToIndex(lastIdx, {
+            align: "end",
+            behavior: "smooth",
           });
         });
       }
     }
-  }, [data?.messages.length, open, visibleMessages.length, virtualizer]);
+  }, [msgCount, lastMsgTextLen, open, visibleMessages.length, virtualizer]);
 
   // Compute context limit based on model
   const modelStr = data
@@ -2502,19 +2553,20 @@ export default function SessionDetail({
     : "";
   const contextLimit = modelContextLimits[modelStr] || 0;
 
-  // Realtime polling — refetch last N messages + todos + children
+  // SSE-driven real-time streaming — no polling
   useEffect(() => {
     if (!open || !sessionId) return;
 
     // Keep ref in sync with current busy state
     isBusyRef.current = isBusy;
 
-    const poll = async () => {
+    // Sync auxiliary data (todos, children, statuses) after message completion
+    const syncAfterCompletion = async () => {
       if (!sessionId) return;
       try {
         const activeSessionId = activeChildId || sessionId;
 
-        // Check for new messages
+        // Fetch authoritative messages from DB
         const countRes = await fetch(
           `/api/sessions/${activeSessionId}/messages?limit=0&offset=0`,
         );
@@ -2523,7 +2575,6 @@ export default function SessionDetail({
         const newTotal = countData.total;
 
         if (newTotal > totalRef.current) {
-          // Preserve already-loaded older messages: fetch from the same start offset
           const prevData = dataRef.current;
           const currentlyLoaded = prevData?.messages?.length || LAST_N;
           const oldTotal = totalRef.current;
@@ -2538,59 +2589,9 @@ export default function SessionDetail({
             const msgData = await msgRes.json();
             setData(msgData);
           }
-        } else if (newTotal > 0) {
-          // No new messages but refetch tail-3 for streaming updates
-          const tailCount = Math.min(3, newTotal);
-          const tailOffset = newTotal - tailCount;
-          const tailRes = await fetch(
-            `/api/sessions/${activeSessionId}/messages?limit=${tailCount}&offset=${tailOffset}`,
-          );
-          if (tailRes.ok) {
-            const tailData = await tailRes.json();
-            setData((prev) => {
-              if (!prev) return tailData;
-
-              // Compare: only update if the last message ID or text has changed
-              const lastTailMsg =
-                tailData.messages[tailData.messages.length - 1];
-              const lastPrevMsg = prev.messages[prev.messages.length - 1];
-
-              const toolStatusEqual =
-                JSON.stringify(
-                  lastTailMsg.tool_calls?.map((tc: ToolCall) => ({
-                    id: tc.callID,
-                    status: tc.status,
-                  })),
-                ) ===
-                JSON.stringify(
-                  lastPrevMsg.tool_calls?.map((tc: ToolCall) => ({
-                    id: tc.callID,
-                    status: tc.status,
-                  })),
-                );
-              if (
-                lastTailMsg &&
-                lastPrevMsg &&
-                lastTailMsg.id === lastPrevMsg.id &&
-                lastTailMsg.text === lastPrevMsg.text &&
-                lastTailMsg.reasoning === lastPrevMsg.reasoning &&
-                toolStatusEqual
-              ) {
-                // No meaningful changes detected, skip update
-                return prev;
-              }
-
-              const base = prev.messages.slice(0, -tailCount);
-              return {
-                ...prev,
-                total: newTotal,
-                messages: [...base, ...tailData.messages],
-              };
-            });
-          }
         }
 
-        // Also refresh todos
+        // Refresh todos, children, statuses
         const todoRes = await fetch(
           `/api/opencode/session/${activeSessionId}/todo`,
         );
@@ -2599,7 +2600,6 @@ export default function SessionDetail({
           setTodos(Array.isArray(todoData) ? todoData : []);
         }
 
-        // Always refresh children and statuses (using parent sessionId)
         const childRes = await fetch(
           `/api/opencode/session/${sessionId}/children`,
         );
@@ -2624,14 +2624,9 @@ export default function SessionDetail({
           setSessionStatuses(statusData);
         }
       } catch {
-        // next poll will retry
+        // ignore — next completion event will retry
       }
     };
-
-    // Reduced polling — SSE handles real-time streaming; this is a safety net
-    const pollInterval = isBusyRef.current ? 3000 : 10000;
-
-    const interval = setInterval(poll, pollInterval);
 
     // SSE for real-time streaming updates + session status
     const es = new EventSource("/api/events");
@@ -2644,7 +2639,6 @@ export default function SessionDetail({
           eventData.type === "opencode_session_status" &&
           eventData.sessionID
         ) {
-          // Update session status immediately without waiting for poll
           setSessionStatuses((prev) => ({
             ...prev,
             [eventData.sessionID]: eventData.status,
@@ -2656,12 +2650,51 @@ export default function SessionDetail({
           ) {
             waitingForResponseRef.current = false;
           }
-          // Status change may mean new messages appeared
-          poll();
           return;
         }
 
-        // Handle streaming message part updates (text chunks, tool progress)
+        // Handle incremental text deltas (efficient streaming)
+        if (
+          eventData.type === "opencode_message_part_delta" &&
+          eventData.sessionID === activeId
+        ) {
+          const { field, delta } = eventData;
+
+          setData((prev) => {
+            if (!prev) return prev;
+            const messages = [...prev.messages];
+            if (messages.length === 0) return prev;
+
+            const lastMsg = messages[messages.length - 1];
+
+            if (lastMsg.role === "user") {
+              const newMsg: Message = {
+                id: "streaming-" + Date.now(),
+                role: "assistant",
+                model: typeof prev.model === "string" ? prev.model : prev.model?.modelID || null,
+                agent: null,
+                time_created: Date.now() / 1000,
+                text: field === "text" ? delta : "",
+                reasoning: field === "reasoning" ? delta : "",
+                tool_calls: [],
+              };
+              messages.push(newMsg);
+            } else {
+              const updated = { ...lastMsg };
+              if (field === "text") {
+                updated.text = (updated.text || "") + delta;
+              } else if (field === "reasoning") {
+                updated.reasoning = (updated.reasoning || "") + delta;
+              }
+              messages[messages.length - 1] = updated;
+            }
+
+            return { ...prev, messages, context_tokens: prev.context_tokens };
+          });
+          return;
+        }
+
+        // Handle streaming message part updates (tool progress, full text sync)
         if (
           eventData.type === "opencode_message_part_updated" &&
           eventData.sessionID === activeId &&
@@ -2675,12 +2708,11 @@ export default function SessionDetail({
 
             const lastMsg = messages[messages.length - 1];
 
-            // If last message is a user message, AI response hasn't been saved yet — create placeholder
             if (lastMsg.role === "user") {
               const newMsg: Message = {
                 id: "streaming-" + Date.now(),
                 role: "assistant",
-                model: prev.model || null,
+                model: typeof prev.model === "string" ? prev.model : prev.model?.modelID || null,
                 agent: eventData?.agent || part?.agent || null,
                 time_created: Date.now() / 1000,
                 text: part.type === "text" ? part.text || "" : "",
@@ -2702,7 +2734,6 @@ export default function SessionDetail({
               };
               messages.push(newMsg);
             } else {
-              // Update existing assistant message in-place
               const updated = { ...lastMsg };
               if (part.type === "text" && part.text !== undefined) {
                 updated.text = part.text;
@@ -2736,24 +2767,25 @@ export default function SessionDetail({
 
             return { ...prev, messages, context_tokens: prev.context_tokens };
           });
-          // Don't poll during streaming — SSE is the source of truth
           return;
         }
 
-        // Handle message completion — do a full sync
+        // Handle message completion — sync authoritative DB state
         if (
           eventData.type === "opencode_message_updated" &&
           eventData.sessionID === activeId
         ) {
-          poll();
+          syncAfterCompletion();
           return;
         }
       } catch {}
-      // Only poll for unrecognized events as safety fallback
+    };
+
+    es.onerror = () => {
+      // SSE disconnected — will auto-reconnect by browser EventSource spec
     };
 
     return () => {
-      clearInterval(interval);
       es.close();
     };
   }, [open, sessionId, activeChildId]);
@@ -3030,6 +3062,26 @@ export default function SessionDetail({
             </div>
           )}
         </div>
+
+        {/* Scroll to bottom button */}
+        {showScrollButton && (
+          <div className="relative">
+            <button
+              onClick={() => {
+                const lastIdx = visibleMessages.length - 1;
+                if (lastIdx >= 0) {
+                  virtualizer.scrollToIndex(lastIdx, { align: "end", behavior: "smooth" });
+                }
+                isNearBottom.current = true;
+                setShowScrollButton(false);
+              }}
+              className="absolute -top-12 right-4 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-background/90 border shadow-md text-xs text-muted-foreground hover:text-foreground hover:bg-background transition-colors backdrop-blur-sm"
+            >
+              <ChevronDown className="w-3.5 h-3.5" />
+              Scroll to bottom
+            </button>
+          </div>
+        )}
 
         {/* Todos + Message Input */}
         <div className="border-t flex-shrink-0">
