@@ -920,6 +920,12 @@ export function getSessionMessages(
       }
     }
 
+    // Strip <mandatory>...</mandatory> blocks to prevent them from flashing in chat UI
+    textContent = textContent.replace(
+      /<mandatory>[\s\S]*?<\/mandatory>\s*/g,
+      "",
+    ).trim();
+
     messages.push({
       id: messageRow.id,
       role: role as "user" | "assistant" | "system",
@@ -931,6 +937,23 @@ export function getSessionMessages(
       tool_calls: toolCalls,
       compactions,
     });
+  }
+
+  // Fallback: if sessionModel is still null (pagination missed the first user message),
+  // query the DB directly for the first user message with a model field.
+  if (!sessionModel) {
+    const firstModelRow = db
+      .prepare(
+        "SELECT data FROM message WHERE session_id = ? " +
+          "AND json_extract(data, '$.role') = 'user' " +
+          "AND json_extract(data, '$.model') IS NOT NULL " +
+          "ORDER BY time_created ASC LIMIT 1",
+      )
+      .get(sessionId) as { data: string } | undefined;
+    if (firstModelRow) {
+      const firstModelData = JSON.parse(firstModelRow.data);
+      sessionModel = firstModelData.model || null;
+    }
   }
 
   const contextTokens = getSessionTokens(sessionId);

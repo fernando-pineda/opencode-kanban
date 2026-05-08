@@ -158,7 +158,6 @@ function stripSwarmPlanTags(text: string): string {
   return text.replace(/<swarm-plan>[\s\S]*?<\/swarm-plan>/g, "").trim();
 }
 
-
 function extractTaskId(output: string): string | null {
   if (!output) return null;
   const match = output.match(/task_id:\s*(ses_[a-zA-Z0-9]+)/);
@@ -2302,60 +2301,55 @@ export default function SessionDetail({
       fetch("/api/opencode/agent").then((r) => r.json()),
       fetch("/api/agents").then((r) => (r.ok ? r.json() : [])),
     ])
-      .then(
-        ([
-          opencodeList,
-          diskList,
-        ]) => {
-          // opencode agents (in-memory, may have richer metadata)
-          const ocAgents = (opencodeList || []) as {
-            name: string;
-            description?: string;
-            mode?: string;
-            hidden?: boolean;
-            model?: { providerID: string; modelID: string };
-          }[];
+      .then(([opencodeList, diskList]) => {
+        // opencode agents (in-memory, may have richer metadata)
+        const ocAgents = (opencodeList || []) as {
+          name: string;
+          description?: string;
+          mode?: string;
+          hidden?: boolean;
+          model?: { providerID: string; modelID: string };
+        }[];
 
-          // Disk-only agents (created after opencode started)
-          const diskAgents = (diskList || []) as {
-            name: string;
-            mode: string;
-            description: string;
-            model: string | null;
-          }[];
+        // Disk-only agents (created after opencode started)
+        const diskAgents = (diskList || []) as {
+          name: string;
+          mode: string;
+          description: string;
+          model: string | null;
+        }[];
 
-          // Merge: start with opencode primaries, add disk-only primaries
-          const visible = ocAgents.filter(
-            (a) => a.mode !== "subagent" && !a.hidden,
-          );
-          const knownNames = new Set(visible.map((a) => a.name));
+        // Merge: start with opencode primaries, add disk-only primaries
+        const visible = ocAgents.filter(
+          (a) => a.mode !== "subagent" && !a.hidden,
+        );
+        const knownNames = new Set(visible.map((a) => a.name));
 
-          for (const da of diskAgents) {
-            if (da.mode === "primary" && !knownNames.has(da.name)) {
-              const modelParts = da.model ? da.model.split("/") : null;
-              visible.push({
-                name: da.name,
-                description: da.description,
-                mode: da.mode,
-                model:
-                  modelParts && modelParts.length === 2
-                    ? { providerID: modelParts[0], modelID: modelParts[1] }
-                    : undefined,
-              });
-            }
+        for (const da of diskAgents) {
+          if (da.mode === "primary" && !knownNames.has(da.name)) {
+            const modelParts = da.model ? da.model.split("/") : null;
+            visible.push({
+              name: da.name,
+              description: da.description,
+              mode: da.mode,
+              model:
+                modelParts && modelParts.length === 2
+                  ? { providerID: modelParts[0], modelID: modelParts[1] }
+                  : undefined,
+            });
           }
+        }
 
-          setAgents(visible);
-          if (visible.length > 0) {
-            // Restore persisted agent selection
-            const saved = getAgentForSession(sessionId || null);
-            const isValid = saved && visible.some((a) => a.name === saved);
-            if (!selectedAgent) {
-              setSelectedAgent(isValid ? saved! : visible[0].name);
-            }
+        setAgents(visible);
+        if (visible.length > 0) {
+          // Restore persisted agent selection
+          const saved = getAgentForSession(sessionId || null);
+          const isValid = saved && visible.some((a) => a.name === saved);
+          if (!selectedAgent) {
+            setSelectedAgent(isValid ? saved! : visible[0].name);
           }
-        },
-      )
+        }
+      })
       .catch(() => {});
     // Re-fetch agents whenever the sheet opens so deletions/creations are reflected
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2680,10 +2674,10 @@ export default function SessionDetail({
               const newMsg: Message = {
                 id: "streaming-" + Date.now(),
                 role: "assistant",
-                model: null,
-                agent: null,
+                model: prev.model || null,
+                agent: eventData?.agent || part?.agent || null,
                 time_created: Date.now() / 1000,
-                text: part.type === "text" ? (part.text || "") : "",
+                text: part.type === "text" ? part.text || "" : "",
                 reasoning: "",
                 tool_calls:
                   part.type === "tool"
@@ -2719,8 +2713,7 @@ export default function SessionDetail({
                     (part.state?.status as ToolCall["status"]) ||
                     (idx >= 0 ? toolCalls[idx].status : "running"),
                   input:
-                    part.state?.input ||
-                    (idx >= 0 ? toolCalls[idx].input : {}),
+                    part.state?.input || (idx >= 0 ? toolCalls[idx].input : {}),
                   output:
                     part.state?.metadata?.output ||
                     (idx >= 0 ? toolCalls[idx].output : ""),
@@ -2735,7 +2728,7 @@ export default function SessionDetail({
               messages[messages.length - 1] = updated;
             }
 
-            return { ...prev, messages };
+            return { ...prev, messages, context_tokens: prev.context_tokens };
           });
           // Don't poll during streaming — SSE is the source of truth
           return;
@@ -2757,7 +2750,7 @@ export default function SessionDetail({
       clearInterval(interval);
       es.close();
     };
-  }, [open, sessionId, activeChildId, isBusy]);
+  }, [open, sessionId, activeChildId]);
 
   // Clear waitingForResponseRef only when the agent response is truly complete.
   // We do NOT clear on user messages because the optimistic user message added
@@ -2793,7 +2786,8 @@ export default function SessionDetail({
       <div
         className={cn(
           "fixed inset-0 z-40 bg-black/50 transition-opacity duration-200",
-          visible ? "opacity-100" : "opacity-0",        )}
+          visible ? "opacity-100" : "opacity-0",
+        )}
         onClick={() => onOpenChange(false)}
       />
 
@@ -2987,7 +2981,9 @@ export default function SessionDetail({
                         children={children}
                         onViewChild={handleViewChild}
                         sessionId={activeChildId || sessionId || ""}
-directory={data?.directory ?? newSessionDirectory ?? null}
+                        directory={
+                          data?.directory ?? newSessionDirectory ?? null
+                        }
                         isBusy={isBusy}
                         isLastAssistant={msg.role === "assistant" && isLast}
                         onAnswerSubmitted={() => {
@@ -3050,12 +3046,12 @@ directory={data?.directory ?? newSessionDirectory ?? null}
               onClose={() => onOpenChange(false)}
               data={data}
               directory={data?.directory ?? newSessionDirectory ?? null}
-             />
-           )}
-         </div>
-       </div>
+            />
+          )}
+        </div>
+      </div>
 
-       {/* Delete confirmation dialog */}
+      {/* Delete confirmation dialog */}
       {confirmDelete &&
         ReactDOM.createPortal(
           <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50">
