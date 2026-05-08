@@ -2284,7 +2284,9 @@ export default function SessionDetail({
     }
 
     // Skip loading when in new session mode (no sessionId yet)
+    // Clear stale data so the previous session's messages don't persist
     if (!sessionId) {
+      setData(null);
       return;
     }
 
@@ -2513,9 +2515,10 @@ export default function SessionDetail({
 
   // Auto-scroll to bottom during streaming and new messages
   // Derive a streaming key that changes when the last message's text grows
-  const lastMsgTextLen = data && data.messages.length > 0
-    ? data.messages[data.messages.length - 1].text?.length ?? 0
-    : 0;
+  const lastMsgTextLen =
+    data && data.messages.length > 0
+      ? (data.messages[data.messages.length - 1].text?.length ?? 0)
+      : 0;
   const msgCount = data?.messages.length ?? 0;
 
   useEffect(() => {
@@ -2526,8 +2529,7 @@ export default function SessionDetail({
     // Determine if we should auto-scroll:
     // 1. Always scroll if user explicitly sent a message (shouldAutoScroll flag)
     // 2. Or scroll if user is near bottom (covers new messages AND streaming text updates)
-    const shouldScroll =
-      shouldAutoScroll.current || isNearBottom.current;
+    const shouldScroll = shouldAutoScroll.current || isNearBottom.current;
 
     if (shouldScroll) {
       shouldAutoScroll.current = false; // Reset flag after use
@@ -2671,7 +2673,10 @@ export default function SessionDetail({
               const newMsg: Message = {
                 id: "streaming-" + Date.now(),
                 role: "assistant",
-                model: typeof prev.model === "string" ? prev.model : prev.model?.modelID || null,
+                model:
+                  typeof prev.model === "string"
+                    ? prev.model
+                    : prev.model?.modelID || null,
                 agent: null,
                 time_created: Date.now() / 1000,
                 text: field === "text" ? delta : "",
@@ -2712,7 +2717,10 @@ export default function SessionDetail({
               const newMsg: Message = {
                 id: "streaming-" + Date.now(),
                 role: "assistant",
-                model: typeof prev.model === "string" ? prev.model : prev.model?.modelID || null,
+                model:
+                  typeof prev.model === "string"
+                    ? prev.model
+                    : prev.model?.modelID || null,
                 agent: eventData?.agent || part?.agent || null,
                 time_created: Date.now() / 1000,
                 text: part.type === "text" ? part.text || "" : "",
@@ -3070,7 +3078,10 @@ export default function SessionDetail({
               onClick={() => {
                 const lastIdx = visibleMessages.length - 1;
                 if (lastIdx >= 0) {
-                  virtualizer.scrollToIndex(lastIdx, { align: "end", behavior: "smooth" });
+                  virtualizer.scrollToIndex(lastIdx, {
+                    align: "end",
+                    behavior: "smooth",
+                  });
                 }
                 isNearBottom.current = true;
                 setShowScrollButton(false);

@@ -63,6 +63,7 @@ function App() {
 
   const handleNewSession = () => {
     if (!activeBoard) return;
+    setSelectedSession(null);
     setNewSessionDir(activeBoard.board.repo_path);
   };
 
