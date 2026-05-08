@@ -25,8 +25,8 @@ export function useKanban(): UseKanbanReturn {
   const [isLoading, setIsLoading] = useState(true)
   const [reconnectCounter, setReconnectCounter] = useState(0)
   const eventSourceRef = useRef<EventSource | null>(null)
-  // Sequence counter to discard stale fetch results (race condition guard)
-  const fetchSeqRef = useRef(0)
+  // Track user's intended board to prevent background fetches from clobbering selection
+  const intendedBoardIdRef = useRef<number | null>(null)
 
   // Fetch all boards (preserves has_busy from current state since the list API doesn't include it)
   const fetchBoards = useCallback(async () => {
@@ -45,19 +45,29 @@ export function useKanban(): UseKanbanReturn {
     }
   }, [])
 
-  // Fetch full board — uses sequence counter to discard stale results
+  // Fetch full board — guards against stale background fetches clobbering user selection
   const fetchBoardFull = useCallback(async (boardId: number) => {
-    const seq = ++fetchSeqRef.current
+    // If user has selected a different board, skip background fetches for the old one
+    const intended = intendedBoardIdRef.current
+    if (intended !== null && intended !== boardId) {
+      return
+    }
     try {
       const res = await fetch(`${API_BASE}/api/boards/${boardId}`)
       const data = await res.json()
-      // Only apply if this is still the most recent fetch
-      if (seq === fetchSeqRef.current) {
-        setActiveBoard(data)
-        // Propagate has_busy to boards list for sidebar spinner indicator
-        if (data.board) {
-          setBoards(prev => prev.map(b => b.id === data.board.id ? { ...b, has_busy: data.board.has_busy } : b))
-        }
+      // Double-check after async: don't apply if user has since selected a different board
+      const intendedNow = intendedBoardIdRef.current
+      if (intendedNow !== null && intendedNow !== boardId) {
+        return
+      }
+      setActiveBoard(data)
+      // Clear intended once we've loaded the target board
+      if (intendedBoardIdRef.current === boardId) {
+        intendedBoardIdRef.current = null
+      }
+      // Propagate has_busy to boards list for sidebar spinner indicator
+      if (data.board) {
+        setBoards(prev => prev.map(b => b.id === data.board.id ? { ...b, has_busy: data.board.has_busy } : b))
       }
     } catch (err) {
       console.error('Failed to fetch board:', err)
@@ -66,6 +76,7 @@ export function useKanban(): UseKanbanReturn {
 
   const selectBoard = useCallback((board: Board) => {
     localStorage.setItem(LAST_ACTIVE_BOARD_KEY, String(board.id))
+    intendedBoardIdRef.current = board.id
     fetchBoardFull(board.id)
   }, [fetchBoardFull])
 
