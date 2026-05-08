@@ -15,12 +15,42 @@ import { Badge } from "@/components/ui/badge";
 interface KanbanCardProps {
   card: CardType;
   onClick?: () => void;
+  searchQuery?: string;
 }
 
 interface TodoItem {
   content: string;
   status: "pending" | "in_progress" | "completed";
   priority: "high" | "medium" | "low";
+}
+
+function HighlightText({
+  text,
+  query,
+}: {
+  text: string;
+  query?: string;
+}) {
+  if (!query || !query.trim()) return <>{text}</>;
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const regex = new RegExp(`(${escaped})`, "gi");
+  const parts = text.split(regex);
+  return (
+    <>
+      {parts.map((part, i) =>
+        regex.test(part) ? (
+          <mark
+            key={i}
+            className="bg-yellow-200/80 text-foreground rounded-sm px-0.5"
+          >
+            {part}
+          </mark>
+        ) : (
+          <span key={i}>{part}</span>
+        ),
+      )}
+    </>
+  );
 }
 
 function formatTokens(tokens: number): string {
@@ -95,6 +125,7 @@ function priorityDot(priority: string) {
 export default function KanbanCard({
   card,
   onClick,
+  searchQuery,
 }: KanbanCardProps) {
   const columnName = card.column_name || "";
   const subtasks = card.subtasks || [];
@@ -176,7 +207,7 @@ export default function KanbanCard({
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <div className="text-sm font-medium line-clamp-2">
-                {card.title}
+                <HighlightText text={card.title} query={searchQuery} />
               </div>
             </div>
 
@@ -211,7 +242,10 @@ export default function KanbanCard({
                             : ""
                         }`}
                       >
-                        {todo.content}
+                        <HighlightText
+                          text={todo.content}
+                          query={searchQuery}
+                        />
                       </span>
                       {priorityDot(todo.priority)}
                     </div>
@@ -241,10 +275,16 @@ export default function KanbanCard({
                             <span className="w-1 bg-muted-foreground/30 flex-shrink-0 self-stretch rounded-full" />
                             <div className="flex flex-col">
                               <span className="text-foreground font-semibold">
-                                {subtask.agent_name}
+                                <HighlightText
+                                  text={subtask.agent_name}
+                                  query={searchQuery}
+                                />
                               </span>
                               <span className="text-foreground/80">
-                                {subtask.title}
+                                <HighlightText
+                                  text={subtask.title}
+                                  query={searchQuery}
+                                />
                               </span>
                             </div>
                           </div>

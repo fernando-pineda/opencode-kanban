@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect, useMemo } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -12,7 +12,7 @@ import {
   type DragEndEvent,
   type DragOverEvent,
 } from "@dnd-kit/core";
-import { BoardFull, Card } from "../types";
+import { BoardFull, Card, TodoItem } from "../types";
 import KanbanColumn from "./kanban-column";
 import MemoriesSheet from "./memories-sheet";
 import GithubSheet from "./github-sheet";
@@ -23,7 +23,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Brain, Github, PlusCircle } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Brain, Github, PlusCircle, Search } from "lucide-react";
 
 interface KanbanBoardProps {
   board: BoardFull;
@@ -43,6 +44,8 @@ export default function KanbanBoard({
   const [linearOpen, setLinearOpen] = useState(false);
   const [activeCard, setActiveCard] = useState<Card | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [cardTodos, setCardTodos] = useState<Record<string, TodoItem[]>>({});
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -52,6 +55,45 @@ export default function KanbanBoard({
       },
     }),
   );
+
+  // Stable dependency for the todos fetch effect (array reference changes every render)
+  const cardIds = board.cards.map((c) => c.session_id).join(",");
+
+  // Fetch todos for all cards when the board changes (needed for search filtering)
+  useEffect(() => {
+    if (!board.cards.length) return;
+    let cancelled = false;
+
+    const fetchAllTodos = async () => {
+      const results = await Promise.allSettled(
+        board.cards.map(async (card) => {
+          const res = await fetch(
+            `/api/opencode/session/${card.session_id}/todo`,
+          );
+          if (!res.ok) return { session_id: card.session_id, todos: [] };
+          const data = await res.json();
+          return {
+            session_id: card.session_id,
+            todos: Array.isArray(data) ? data : [],
+          };
+        }),
+      );
+
+      if (cancelled) return;
+      const next: Record<string, TodoItem[]> = {};
+      for (const r of results) {
+        if (r.status === "fulfilled") {
+          next[r.value.session_id] = r.value.todos;
+        }
+      }
+      setCardTodos(next);
+    };
+
+    fetchAllTodos();
+    return () => {
+      cancelled = true;
+    };
+  }, [cardIds]);
 
   const handleDragStart = useCallback(
     (event: DragStartEvent) => {
@@ -116,6 +158,29 @@ export default function KanbanBoard({
     [board.cards, board.columns, boardId],
   );
 
+  // Compute filtered cards based on search query
+  const filteredCards = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return board.cards;
+
+    return board.cards.filter((card) => {
+      // Match card title
+      if (card.title.toLowerCase().includes(q)) return true;
+      // Match card description
+      if (card.description?.toLowerCase().includes(q)) return true;
+      // Match subtask title or agent_name
+      if (card.subtasks?.some(
+        (st) =>
+          st.title.toLowerCase().includes(q) ||
+          st.agent_name.toLowerCase().includes(q),
+      )) return true;
+      // Match todo content (from fetched todos)
+      const todos = cardTodos[card.session_id];
+      if (todos?.some((t) => t.content.toLowerCase().includes(q))) return true;
+      return false;
+    });
+  }, [board.cards, searchQuery, cardTodos]);
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Board Header — fixed, full width */}
@@ -127,7 +192,17 @@ export default function KanbanBoard({
           </p>
         </div>
         <TooltipProvider delayDuration={300}>
-          <div className="flex items-center gap-0.5 shrink-0 mt-0.5">
+          <div className="flex items-center gap-1 shrink-0 mt-0.5">
+            <div className="flex items-center gap-2 mr-1">
+              <Search className="h-4 w-4 text-muted-foreground shrink-0" />
+              <Input
+                placeholder="Filter cards..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="h-7 w-44 text-xs border-0 shadow-none focus-visible:ring-0 bg-accent/50"
+              />
+
+            </div>
             {[
               {
                 icon: Brain,
@@ -198,7 +273,7 @@ export default function KanbanBoard({
         <div className="flex-1 overflow-x-auto overflow-y-hidden min-h-0">
           <div className="flex gap-6 px-6 pb-4 h-full min-h-0">
             {board.columns.map((column) => {
-              const columnCards = board.cards.filter(
+              const columnCards = filteredCards.filter(
                 (card) => card.column_name === column.name,
               );
               return (
@@ -209,6 +284,7 @@ export default function KanbanBoard({
                   onCardClick={onCardClick}
                   overId={overId}
                   activeCardId={activeCard?.session_id ?? null}
+                  searchQuery={searchQuery}
                 />
               );
             })}

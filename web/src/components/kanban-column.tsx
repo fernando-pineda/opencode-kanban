@@ -12,6 +12,7 @@ interface KanbanColumnProps {
   onCardClick?: (sessionId: string) => void;
   overId: string | null;
   activeCardId: string | null;
+  searchQuery?: string;
 }
 
 const columnDescriptions: Record<string, string> = {
@@ -27,6 +28,7 @@ export default function KanbanColumn({
   onCardClick,
   overId,
   activeCardId,
+  searchQuery,
 }: KanbanColumnProps) {
   const { setNodeRef, isOver } = useDroppable({ id: column.name });
 
@@ -83,6 +85,7 @@ export default function KanbanColumn({
               <KanbanCard
                 card={card}
                 onClick={() => handleCardClick(card.session_id)}
+                searchQuery={searchQuery}
               />
             </React.Fragment>
           ))}
