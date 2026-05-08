@@ -37,19 +37,38 @@ interface AgentCardProps {
   onDelete: (name: string) => void;
 }
 
-function AgentCard({ agent, content, fileExists, isDirty, isSaving, canDelete, isDeleting, onContentChange, onSave, onDelete }: AgentCardProps) {
+function AgentCard({
+  agent,
+  content,
+  fileExists,
+  isDirty,
+  isSaving,
+  canDelete,
+  isDeleting,
+  onContentChange,
+  onSave,
+  onDelete,
+}: AgentCardProps) {
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   return (
     <>
-      <div className={`rounded-lg border bg-card p-4 space-y-3${confirmDelete ? " pointer-events-none" : ""}`}>
+      <div
+        className={`rounded-lg border bg-card p-4 space-y-3${confirmDelete ? " pointer-events-none" : ""}`}
+      >
         {/* Header row */}
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
             <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <span className="text-sm font-semibold capitalize">{agent.name}</span>
+            <span className="text-sm font-semibold capitalize">
+              {agent.name}
+            </span>
             <Badge variant={agent.mode === "primary" ? "secondary" : "outline"}>
-              {agent.mode === "primary" ? "Primary" : agent.mode === "all" ? "All" : "Subagent"}
+              {agent.mode === "primary"
+                ? "Primary"
+                : agent.mode === "all"
+                  ? "All"
+                  : "Subagent"}
             </Badge>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
@@ -88,7 +107,9 @@ function AgentCard({ agent, content, fileExists, isDirty, isSaving, canDelete, i
         {/* Action bar */}
         <div className="flex items-center justify-between">
           {isDirty && (
-            <span className="text-xs text-muted-foreground">Unsaved changes</span>
+            <span className="text-xs text-muted-foreground">
+              Unsaved changes
+            </span>
           )}
           {!agent.native && (
             <Button
@@ -107,7 +128,11 @@ function AgentCard({ agent, content, fileExists, isDirty, isSaving, canDelete, i
             </Button>
           )}
           <div className="ml-auto">
-            <Button size="sm" disabled={!isDirty || isSaving} onClick={() => onSave(agent.name)}>
+            <Button
+              size="sm"
+              disabled={!isDirty || isSaving}
+              onClick={() => onSave(agent.name)}
+            >
               {isSaving ? (
                 <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
               ) : (
@@ -121,14 +146,13 @@ function AgentCard({ agent, content, fileExists, isDirty, isSaving, canDelete, i
 
       {/* Delete confirmation dialog */}
       {confirmDelete && (
-        <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50"
-
-        >
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50">
           <div className="bg-popover text-popover-foreground rounded-lg border p-4 shadow-lg max-w-sm mx-4 space-y-3">
             <h3 className="font-semibold text-sm">Delete agent</h3>
             <p className="text-sm text-muted-foreground">
-              Delete the <strong className="capitalize">{agent.name}</strong> agent? This will remove its configuration file. The agent may still appear if it's registered by opencode.
+              Delete the <strong className="capitalize">{agent.name}</strong>{" "}
+              agent? This will remove its configuration file. The agent may
+              still appear if it's registered by opencode.
             </p>
             <div className="flex justify-end gap-2">
               <Button
@@ -158,37 +182,51 @@ function AgentCard({ agent, content, fileExists, isDirty, isSaving, canDelete, i
 
 // ── Model Selector ───────────────────────────────────────────
 
-function ModelSelector({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+function ModelSelector({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [filter, setFilter] = useState("");
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    fetch("/api/models").then(r => r.json()).then(setModels).catch(() => {});
+    fetch("/api/models")
+      .then((r) => r.json())
+      .then(setModels)
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      if (ref.current && !ref.current.contains(e.target as Node))
+        setOpen(false);
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  const filtered = models.filter(m =>
-    m.name.toLowerCase().includes(filter.toLowerCase()) ||
-    m.modelID.toLowerCase().includes(filter.toLowerCase()) ||
-    m.providerID.toLowerCase().includes(filter.toLowerCase())
+  const filtered = models.filter(
+    (m) =>
+      m.name.toLowerCase().includes(filter.toLowerCase()) ||
+      m.modelID.toLowerCase().includes(filter.toLowerCase()) ||
+      m.providerID.toLowerCase().includes(filter.toLowerCase()),
   );
 
   // Group by provider
-  const grouped = filtered.reduce((acc, m) => {
-    const key = m.providerID;
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(m);
-    return acc;
-  }, {} as Record<string, ModelInfo[]>);
+  const grouped = filtered.reduce(
+    (acc, m) => {
+      const key = m.providerID;
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(m);
+      return acc;
+    },
+    {} as Record<string, ModelInfo[]>,
+  );
 
   return (
     <div className="relative" ref={ref}>
@@ -196,28 +234,42 @@ function ModelSelector({ value, onChange }: { value: string; onChange: (v: strin
         type="text"
         className="w-full text-xs bg-muted rounded-md px-3 py-2 border focus:ring-1 focus:ring-ring outline-none"
         placeholder="Search models..."
-        value={open ? filter : (value || "")}
-        onChange={(e) => { setFilter(e.target.value); setOpen(true); }}
-        onFocus={() => { setOpen(true); setFilter(value || ""); }}
+        value={open ? filter : value || ""}
+        onChange={(e) => {
+          setFilter(e.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => {
+          setOpen(true);
+          setFilter(value || "");
+        }}
       />
       {open && (
         <div className="absolute z-50 w-full mt-1 bg-popover border rounded-md shadow-lg max-h-48 overflow-y-auto">
           {value && (
             <button
               className="w-full text-left text-xs px-3 py-1.5 hover:bg-accent text-muted-foreground"
-              onClick={() => { onChange(""); setOpen(false); }}
+              onClick={() => {
+                onChange("");
+                setOpen(false);
+              }}
             >
               Clear selection
             </button>
           )}
           {Object.entries(grouped).map(([provider, pModels]) => (
             <div key={provider}>
-              <div className="text-[10px] font-semibold text-muted-foreground px-3 py-1 bg-muted/50">{provider}</div>
-              {pModels.map(m => (
+              <div className="text-[10px] font-semibold text-muted-foreground px-3 py-1 bg-muted/50">
+                {provider}
+              </div>
+              {pModels.map((m) => (
                 <button
                   key={`${m.providerID}/${m.modelID}`}
                   className="w-full text-left text-xs px-3 py-1.5 hover:bg-accent truncate"
-                  onClick={() => { onChange(`${m.providerID}/${m.modelID}`); setOpen(false); }}
+                  onClick={() => {
+                    onChange(`${m.providerID}/${m.modelID}`);
+                    setOpen(false);
+                  }}
                 >
                   {m.name}
                 </button>
@@ -225,7 +277,9 @@ function ModelSelector({ value, onChange }: { value: string; onChange: (v: strin
             </div>
           ))}
           {filtered.length === 0 && (
-            <div className="text-xs text-muted-foreground px-3 py-2">No models found</div>
+            <div className="text-xs text-muted-foreground px-3 py-2">
+              No models found
+            </div>
           )}
         </div>
       )}
@@ -256,8 +310,16 @@ function CreateAgentForm({ mode, onCreated }: CreateAgentFormProps) {
   const [error, setError] = useState<string | null>(null);
 
   const handleCreate = async () => {
-    if (!name.trim()) { setError("Name is required"); return; }
-    if (!/^[a-zA-Z0-9_-]+$/.test(name.trim())) { setError("Name can only contain letters, numbers, hyphens, and underscores"); return; }
+    if (!name.trim()) {
+      setError("Name is required");
+      return;
+    }
+    if (!/^[a-zA-Z0-9_-]+$/.test(name.trim())) {
+      setError(
+        "Name can only contain letters, numbers, hyphens, and underscores",
+      );
+      return;
+    }
 
     setCreating(true);
     setError(null);
@@ -310,8 +372,18 @@ function CreateAgentForm({ mode, onCreated }: CreateAgentFormProps) {
   return (
     <div className="rounded-lg border bg-card p-4 space-y-3">
       <div className="flex items-center justify-between">
-        <h4 className="text-sm font-semibold">New {mode === "primary" ? "Agent" : "Subagent"}</h4>
-        <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => { setOpen(false); setError(null); }}>
+        <h4 className="text-sm font-semibold">
+          New {mode === "primary" ? "Agent" : "Subagent"}
+        </h4>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 w-6 p-0"
+          onClick={() => {
+            setOpen(false);
+            setError(null);
+          }}
+        >
           <X className="h-3.5 w-3.5" />
         </Button>
       </div>
@@ -347,11 +419,26 @@ function CreateAgentForm({ mode, onCreated }: CreateAgentFormProps) {
       {error && <p className="text-xs text-destructive">{error}</p>}
 
       <div className="flex justify-end gap-2">
-        <Button variant="outline" size="sm" onClick={() => { setOpen(false); setError(null); }}>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            setOpen(false);
+            setError(null);
+          }}
+        >
           Cancel
         </Button>
-        <Button size="sm" disabled={creating || !name.trim()} onClick={handleCreate}>
-          {creating ? <Loader2 className="h-3 w-3 mr-1.5 animate-spin" /> : <Plus className="h-3 w-3 mr-1.5" />}
+        <Button
+          size="sm"
+          disabled={creating || !name.trim()}
+          onClick={handleCreate}
+        >
+          {creating ? (
+            <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+          ) : (
+            <Plus className="h-3 w-3 mr-1.5" />
+          )}
           Create
         </Button>
       </div>
@@ -375,7 +462,19 @@ interface AgentsListProps {
   onAgentCreated: (info: CreateAgentInfo) => void;
 }
 
-export function AgentsList({ agents, agentFiles, agentFileExists, dirtyFiles, saving, deleting, mode, onContentChange, onSave, onDelete, onAgentCreated }: AgentsListProps) {
+export function AgentsList({
+  agents,
+  agentFiles,
+  agentFileExists,
+  dirtyFiles,
+  saving,
+  deleting,
+  mode,
+  onContentChange,
+  onSave,
+  onDelete,
+  onAgentCreated,
+}: AgentsListProps) {
   if (agents.length === 0) {
     return (
       <div className="space-y-3">
@@ -414,7 +513,9 @@ export function AgentsList({ agents, agentFiles, agentFileExists, dirtyFiles, sa
 export function useAgentsData() {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [agentFiles, setAgentFiles] = useState<Record<string, string>>({});
-  const [agentFileExists, setAgentFileExists] = useState<Record<string, boolean>>({});
+  const [agentFileExists, setAgentFileExists] = useState<
+    Record<string, boolean>
+  >({});
   const [dirtyFiles, setDirtyFiles] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState<Record<string, boolean>>({});
   const [deleting, setDeleting] = useState<Record<string, boolean>>({});
@@ -433,9 +534,25 @@ export function useAgentsData() {
           fetch("/api/agents/hidden"),
           fetch("/api/agents"),
         ]);
-        if (!agentRes.ok) throw new Error(`Failed to fetch agents: ${agentRes.status}`);
-        const opencodeAgents: AgentInfo[] = await agentRes.json();
-        const hiddenData = hiddenRes.ok ? await hiddenRes.json() : { hidden: [] };
+
+        // Gracefully handle opencode proxy being unavailable (502, etc.)
+        // Fall back to disk-only agents in that case
+        let opencodeAgents: AgentInfo[] = [];
+        if (agentRes.ok) {
+          try {
+            opencodeAgents = await agentRes.json();
+          } catch {
+            // JSON parse error — treat as empty
+            console.warn("[agents] Failed to parse opencode agent response");
+          }
+        } else {
+          console.warn(
+            `[agents] opencode agent API returned ${agentRes.status}, using disk-only agents`,
+          );
+        }
+        const hiddenData = hiddenRes.ok
+          ? await hiddenRes.json()
+          : { hidden: [] };
         const hidden = (hiddenData.hidden || []) as string[];
         setHiddenAgents(hidden);
 
@@ -445,7 +562,7 @@ export function useAgentsData() {
         let merged = [...opencodeAgents];
 
         if (diskRes.ok) {
-          const diskAgents = await diskRes.json() as Array<{
+          const diskAgents = (await diskRes.json()) as Array<{
             name: string;
             mode: string;
             description: string;
@@ -460,9 +577,10 @@ export function useAgentsData() {
                 description: da.description,
                 hidden: false,
                 native: false,
-                model: modelParts && modelParts.length === 2
-                  ? { providerID: modelParts[0], modelID: modelParts[1] }
-                  : null,
+                model:
+                  modelParts && modelParts.length === 2
+                    ? { providerID: modelParts[0], modelID: modelParts[1] }
+                    : null,
               });
             }
           }
@@ -471,19 +589,25 @@ export function useAgentsData() {
         setAgents(merged);
 
         // Fetch file content for each visible agent in parallel
-        const visible = merged.filter((a: AgentInfo) => a.hidden !== true && !hidden.includes(a.name));
+        const visible = merged.filter(
+          (a: AgentInfo) => a.hidden !== true && !hidden.includes(a.name),
+        );
         const entries = visible.map(async (agent: AgentInfo) => {
-            try {
-              const fileRes = await fetch(`/api/agents/${agent.name}/file`);
-              if (fileRes.ok) {
-                const fileData = await fileRes.json();
-                return { name: agent.name, content: fileData.content || "", exists: fileData.exists !== false };
-              }
-            } catch {
-              // non-critical
+          try {
+            const fileRes = await fetch(`/api/agents/${agent.name}/file`);
+            if (fileRes.ok) {
+              const fileData = await fileRes.json();
+              return {
+                name: agent.name,
+                content: fileData.content || "",
+                exists: fileData.exists !== false,
+              };
             }
-            return { name: agent.name, content: "", exists: false };
-          });
+          } catch {
+            // non-critical
+          }
+          return { name: agent.name, content: "", exists: false };
+        });
 
         const results = await Promise.all(entries);
         const files: Record<string, string> = {};
@@ -511,27 +635,30 @@ export function useAgentsData() {
     setDirtyFiles((prev) => new Set(prev).add(name));
   }, []);
 
-  const handleSave = useCallback(async (agentName: string) => {
-    setSaving((prev) => ({ ...prev, [agentName]: true }));
-    try {
-      const res = await fetch(`/api/agents/${agentName}/file`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: agentFiles[agentName] }),
-      });
-      if (!res.ok) throw new Error(`Failed: ${res.status}`);
-      setDirtyFiles((prev) => {
-        const next = new Set(prev);
-        next.delete(agentName);
-        return next;
-      });
-      toast.success(`Agent "${agentName}" saved successfully`);
-    } catch {
-      toast.error(`Failed to save agent "${agentName}"`);
-    } finally {
-      setSaving((prev) => ({ ...prev, [agentName]: false }));
-    }
-  }, [agentFiles]);
+  const handleSave = useCallback(
+    async (agentName: string) => {
+      setSaving((prev) => ({ ...prev, [agentName]: true }));
+      try {
+        const res = await fetch(`/api/agents/${agentName}/file`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: agentFiles[agentName] }),
+        });
+        if (!res.ok) throw new Error(`Failed: ${res.status}`);
+        setDirtyFiles((prev) => {
+          const next = new Set(prev);
+          next.delete(agentName);
+          return next;
+        });
+        toast.success(`Agent "${agentName}" saved successfully`);
+      } catch {
+        toast.error(`Failed to save agent "${agentName}"`);
+      } finally {
+        setSaving((prev) => ({ ...prev, [agentName]: false }));
+      }
+    },
+    [agentFiles],
+  );
 
   const handleDelete = useCallback(async (agentName: string) => {
     setDeleting((prev) => ({ ...prev, [agentName]: true }));
@@ -577,12 +704,13 @@ export function useAgentsData() {
       description: info.description || info.name,
       hidden: false,
       native: false,
-      model: modelParts && modelParts.length === 2
-        ? { providerID: modelParts[0], modelID: modelParts[1] }
-        : null,
+      model:
+        modelParts && modelParts.length === 2
+          ? { providerID: modelParts[0], modelID: modelParts[1] }
+          : null,
     };
-    setAgents(prev => {
-      if (prev.some(a => a.name === info.name)) return prev;
+    setAgents((prev) => {
+      if (prev.some((a) => a.name === info.name)) return prev;
       return [...prev, newAgent];
     });
 
@@ -591,17 +719,27 @@ export function useAgentsData() {
       const fileRes = await fetch(`/api/agents/${info.name}/file`);
       if (fileRes.ok) {
         const fileData = await fileRes.json();
-        setAgentFiles(prev => ({ ...prev, [info.name]: fileData.content || "" }));
-        setAgentFileExists(prev => ({ ...prev, [info.name]: fileData.exists !== false }));
+        setAgentFiles((prev) => ({
+          ...prev,
+          [info.name]: fileData.content || "",
+        }));
+        setAgentFileExists((prev) => ({
+          ...prev,
+          [info.name]: fileData.exists !== false,
+        }));
       }
     } catch {
       // non-critical
     }
   }, []);
 
-  const visibleAgents = agents.filter((a) => a.hidden !== true && !hiddenAgents.includes(a.name));
+  const visibleAgents = agents.filter(
+    (a) => a.hidden !== true && !hiddenAgents.includes(a.name),
+  );
   const primaryAgents = visibleAgents.filter((a) => a.mode === "primary");
-  const subagents = visibleAgents.filter((a) => a.mode === "subagent" || a.mode === "all");
+  const subagents = visibleAgents.filter(
+    (a) => a.mode === "subagent" || a.mode === "all",
+  );
 
   return {
     loading,
@@ -634,6 +772,8 @@ export function AgentsLoadingSkeleton() {
 
 export function AgentsError({ error }: { error: string }) {
   return (
-    <div className="text-sm text-destructive">Failed to load agents: {error}</div>
+    <div className="text-sm text-destructive">
+      Failed to load agents: {error}
+    </div>
   );
 }

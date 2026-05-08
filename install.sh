@@ -361,8 +361,16 @@ if [ "$(uname)" = "Darwin" ]; then
 </plist>
 PLIST
 
-  # Unload if already loaded, then load
-  launchctl bootout "gui/$(id -u)/com.opencode-kanban.web" 2>/dev/null || true
+  # Stop old service if running, wait for port release, then start new one
+  if launchctl bootout "gui/$(id -u)/com.opencode-kanban.web" 2>/dev/null; then
+    info "  Waiting for port 3210 to be released..."
+    for i in $(seq 1 20); do
+      if ! lsof -i :3210 -sTCP:LISTEN -P -n 2>/dev/null | grep -q .; then
+        break
+      fi
+      sleep 0.5
+    done
+  fi
   if ! launchctl bootstrap "gui/$(id -u)" "$KANBAN_PLIST" 2>/dev/null; then
     warn "  Failed to bootstrap web plist (may already be loaded or needs sudo)"
   fi
@@ -416,7 +424,15 @@ PLIST
 </plist>
 PLIST
 
-  launchctl bootout "gui/$(id -u)/com.opencode.serve" 2>/dev/null || true
+  if launchctl bootout "gui/$(id -u)/com.opencode.serve" 2>/dev/null; then
+    info "  Waiting for port 4096 to be released..."
+    for i in $(seq 1 20); do
+      if ! lsof -i :4096 -sTCP:LISTEN -P -n 2>/dev/null | grep -q .; then
+        break
+      fi
+      sleep 0.5
+    done
+  fi
   if ! launchctl bootstrap "gui/$(id -u)" "$SERVE_PLIST" 2>/dev/null; then
     warn "  Failed to bootstrap opencode serve plist (may already be loaded or needs sudo)"
   fi

@@ -46,6 +46,7 @@ export function useSpeechRecognition(
   const [interimTranscript, setInterimTranscript] = React.useState("")
   const [error, setError] = React.useState<string | null>(null)
   const errorRef = React.useRef<string | null>(null)
+  const networkRetryRef = React.useRef(0)
 
   const supported = React.useMemo(() => {
     return !!(
@@ -61,6 +62,7 @@ export function useSpeechRecognition(
   const startListening = React.useCallback(() => {
     // Reset error and transcript refs for a fresh session
     errorRef.current = null
+    networkRetryRef.current = 0
     transcriptRef.current = ""
     if (recognitionRef.current) {
       try {
@@ -116,9 +118,31 @@ export function useSpeechRecognition(
       if (errorType === "not-allowed") {
         setError("Microphone access was denied. Please allow microphone permissions.")
         errorRef.current = "Microphone access was denied. Please allow microphone permissions."
+      } else if (errorType === "network") {
+        // Network errors to Google's speech servers can be transient — retry once
+        if (networkRetryRef.current < 1) {
+          networkRetryRef.current++
+          // Don't set error, just let onend auto-restart
+          isListeningRef.current = true
+          return
+        }
+        setError("Unable to reach Google's speech service. This may be caused by an ad blocker, VPN, or firewall blocking speech recognition.")
+        errorRef.current = "network"
+      } else if (errorType === "aborted") {
+        // Aborted is usually benign — recognition was stopped or superseded
+        isListeningRef.current = false
+        setIsListening(false)
+        setInterimTranscript("")
+        return
+      } else if (errorType === "audio-capture") {
+        setError("No microphone found. Please connect a microphone and try again.")
+        errorRef.current = "audio-capture"
+      } else if (errorType === "service-not-allowed") {
+        setError("Speech recognition service is not allowed. Please check your browser settings.")
+        errorRef.current = "service-not-allowed"
       } else {
         setError(`Speech recognition error: ${errorType}`)
-        errorRef.current = `Speech recognition error: ${errorType}`
+        errorRef.current = errorType
       }
 
       isListeningRef.current = false
@@ -129,9 +153,11 @@ export function useSpeechRecognition(
     recognition.onend = () => {
       // If the user hasn't explicitly stopped and no error occurred,
       // auto-restart. Chrome ends recognition after a period of silence.
-      if (isListeningRef.current) {
+      // Don't auto-restart if the session ended due to an error (network, etc.)
+      if (isListeningRef.current && !errorRef.current) {
         try {
           recognition.start()
+          networkRetryRef.current = 0
         } catch {
           // If start fails (e.g. recognition was aborted), stay stopped.
           setIsListening(false)

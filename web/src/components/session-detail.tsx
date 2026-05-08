@@ -1066,9 +1066,7 @@ const MessageRow = memo(function MessageRow({
                   <StatusCard data={entireStatus} />
                 ) : (
                   <MarkdownContent
-                    content={
-                      stripSwarmPlanTags(stripMandatoryTags(msg.text))
-                    }
+                    content={stripSwarmPlanTags(stripMandatoryTags(msg.text))}
                     className={cn(
                       msg.role === "user" &&
                         "[&_a]:text-primary-foreground/80 [&_a]:underline",
@@ -1436,7 +1434,8 @@ const ChatInput = memo(function ChatInput({
     onFinalTranscript: (text) => {
       // Append to existing input
       setInputValue((prev) => {
-        const separator = prev && !prev.endsWith(" ") && !prev.endsWith("\n") ? " " : "";
+        const separator =
+          prev && !prev.endsWith(" ") && !prev.endsWith("\n") ? " " : "";
         return prev + separator + text;
       });
     },
@@ -1531,7 +1530,10 @@ const ChatInput = memo(function ChatInput({
         localStorage.removeItem(draftKey);
       } catch {}
     } catch (err) {
-      // Error is handled by parent, input stays filled so user can retry
+      // Show error toast so the user knows what happened
+      const message =
+        err instanceof Error ? err.message : "Failed to send message";
+      toast.error(`Failed to send: ${message}`);
       console.error("Failed to send message:", err);
     }
   }, [inputValue, onSend, draftKey]);
@@ -1671,10 +1673,12 @@ const ChatInput = memo(function ChatInput({
   return (
     <div className="px-4 pt-3 pb-3">
       {/* Input container with all elements inside */}
-      <div className={cn(
-        "relative bg-input rounded-md",
-        isListening && "ring-2 ring-red-500/50 animate-pulse",
-      )}>
+      <div
+        className={cn(
+          "relative bg-input rounded-md",
+          isListening && "ring-2 ring-red-500/50 animate-pulse",
+        )}
+      >
         <textarea
           ref={inputRef}
           value={inputValue}
@@ -1770,7 +1774,9 @@ const ChatInput = memo(function ChatInput({
                     {isListening ? (
                       <>
                         <MicOff className="w-3.5 h-3.5" />
-                        <span className="text-[10px] animate-pulse">Listening...</span>
+                        <span className="text-[10px] animate-pulse">
+                          Listening...
+                        </span>
                       </>
                     ) : (
                       <>
@@ -2076,7 +2082,10 @@ export default function SessionDetail({
           sid = newSession.id;
           if (sid) onSessionCreated?.(sid);
         }
-        if (!sid) return;
+        if (!sid) {
+          setSending(false);
+          return;
+        }
         // Persist agent selection for this session and globally
         if (selectedAgent) {
           saveAgentForSession(sid, selectedAgent);
@@ -2452,7 +2461,7 @@ export default function SessionDetail({
   // Fetch agents (merge opencode in-memory + disk-only agents)
   useEffect(() => {
     Promise.all([
-      fetch("/api/opencode/agent").then((r) => r.json()),
+      fetch("/api/opencode/agent").then((r) => (r.ok ? r.json() : [])),
       fetch("/api/agents").then((r) => (r.ok ? r.json() : [])),
     ])
       .then(([opencodeList, diskList]) => {
