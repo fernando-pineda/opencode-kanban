@@ -9,3 +9,4 @@ web/dist/
 .DS_Store
 scripts/start-web.sh
 *.plist
+web/public/models/

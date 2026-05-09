@@ -1419,22 +1419,34 @@ const ChatInput = memo(function ChatInput({
   const mentionFilesRef = useRef<FileEntry[]>([]);
 
   // Speech recognition
+  const [interimTranscript, setInterimTranscript] = useState("");
+  const preRecordingInputRef = useRef<string>("");
+
   const {
     isListening,
-    interimTranscript,
+    isProcessing,
+    isModelLoading,
+    modelLoadProgress,
     supported: speechSupported,
     error: speechError,
     startListening,
     stopListening,
   } = useSpeechRecognition({
-    lang: undefined, // use browser default
+    onInterimTranscript: (text) => {
+      // Show interim text as the input value while recording
+      const base = preRecordingInputRef.current;
+      const separator =
+        base && !base.endsWith(" ") && !base.endsWith("\n") ? " " : "";
+      setInputValue(base + separator + text);
+      setInterimTranscript(text);
+    },
     onFinalTranscript: (text) => {
-      // Append to existing input
-      setInputValue((prev) => {
-        const separator =
-          prev && !prev.endsWith(" ") && !prev.endsWith("\n") ? " " : "";
-        return prev + separator + text;
-      });
+      // Replace with final transcription
+      const base = preRecordingInputRef.current;
+      const separator =
+        base && !base.endsWith(" ") && !base.endsWith("\n") ? " " : "";
+      setInputValue(base + separator + text);
+      setInterimTranscript("");
     },
   });
 
@@ -1491,13 +1503,15 @@ const ChatInput = memo(function ChatInput({
         if (isListening) {
           stopListening();
         } else {
+          preRecordingInputRef.current = inputValue;
+          setInterimTranscript("");
           startListening();
         }
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [speechSupported, isListening, startListening, stopListening]);
+  }, [speechSupported, isListening, startListening, stopListening, inputValue]);
 
   // Show speech error toast
   useEffect(() => {
@@ -1699,10 +1713,11 @@ const ChatInput = memo(function ChatInput({
           )}
         />
 
-        {/* Interim speech transcript overlay */}
-        {isListening && interimTranscript && (
-          <div className="absolute top-2 left-3 right-3 pointer-events-none text-sm text-muted-foreground/50 italic">
-            {interimTranscript}
+        {/* Speech processing indicator */}
+        {isProcessing && (
+          <div className="absolute top-2 left-3 right-3 pointer-events-none text-sm text-muted-foreground/70 flex items-center gap-2">
+            <div className="h-3 w-3 animate-spin rounded-full border-2 border-muted-foreground/50 border-t-transparent" />
+            <span>Transcribing...</span>
           </div>
         )}
 
@@ -1758,6 +1773,9 @@ const ChatInput = memo(function ChatInput({
                       if (isListening) {
                         stopListening();
                       } else {
+                        // Save current input before recording starts
+                        preRecordingInputRef.current = inputValue;
+                        setInterimTranscript("");
                         startListening();
                       }
                     }}
@@ -1765,14 +1783,30 @@ const ChatInput = memo(function ChatInput({
                       "flex items-center gap-1.5 text-xs transition-colors",
                       isListening
                         ? "text-red-500 hover:text-red-600"
+                        : isModelLoading || isProcessing
+                        ? "text-yellow-500 hover:text-yellow-600"
                         : "text-muted-foreground hover:text-foreground",
                     )}
                   >
-                    {isListening ? (
+                    {isModelLoading ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span className="text-[10px]">
+                          {modelLoadProgress > 0 ? `${Math.round(modelLoadProgress)}%` : "Loading..."}
+                        </span>
+                      </>
+                    ) : isListening ? (
                       <>
                         <MicOff className="w-3.5 h-3.5" />
                         <span className="text-[10px] animate-pulse">
                           Listening...
+                        </span>
+                      </>
+                    ) : isProcessing ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span className="text-[10px]">
+                          Transcribing...
                         </span>
                       </>
                     ) : (
@@ -1786,7 +1820,7 @@ const ChatInput = memo(function ChatInput({
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="top" sideOffset={6} className="text-xs">
-                  {isListening ? "Stop dictation" : "Start voice dictation"}
+                  {isModelLoading ? "Loading speech model..." : isListening ? "Stop dictation" : isProcessing ? "Transcribing..." : "Start voice dictation"}
                 </TooltipContent>
               </Tooltip>
             )}

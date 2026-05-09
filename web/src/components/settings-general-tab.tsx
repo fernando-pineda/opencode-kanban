@@ -1,8 +1,15 @@
 import { useState, useEffect, useCallback } from "react";
-import { Loader2, RotateCcw, ToggleLeft, ToggleRight, Brain, FileText, Save } from "lucide-react";
+import { Loader2, RotateCcw, ToggleLeft, ToggleRight, Brain, FileText, Save, Mic } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface GeneralSettingsData {
   memories_enabled: boolean;
@@ -16,6 +23,35 @@ const DEFAULTS: GeneralSettingsData = {
   memories_keep_important: true,
 };
 
+/** Whisper-supported languages (from the error message the model returns). */
+const WHISPER_LANGUAGES = [
+  { value: "any", label: "Auto-detect" },
+  { value: "english", label: "English" },
+  { value: "spanish", label: "Spanish" },
+  { value: "french", label: "French" },
+  { value: "german", label: "German" },
+  { value: "italian", label: "Italian" },
+  { value: "portuguese", label: "Portuguese" },
+  { value: "chinese", label: "Chinese" },
+  { value: "japanese", label: "Japanese" },
+  { value: "korean", label: "Korean" },
+  { value: "russian", label: "Russian" },
+  { value: "arabic", label: "Arabic" },
+  { value: "hindi", label: "Hindi" },
+  { value: "dutch", label: "Dutch" },
+  { value: "polish", label: "Polish" },
+  { value: "turkish", label: "Turkish" },
+  { value: "swedish", label: "Swedish" },
+  { value: "ukrainian", label: "Ukrainian" },
+  { value: "romanian", label: "Romanian" },
+  { value: "greek", label: "Greek" },
+  { value: "czech", label: "Czech" },
+  { value: "finnish", label: "Finnish" },
+  { value: "vietnamese", label: "Vietnamese" },
+  { value: "thai", label: "Thai" },
+  { value: "catalan", label: "Catalan" },
+];
+
 export default function SettingsGeneralTab() {
   const [settings, setSettings] = useState<GeneralSettingsData>(DEFAULTS);
   const [loading, setLoading] = useState(true);
@@ -25,6 +61,9 @@ export default function SettingsGeneralTab() {
   const [agentsMdLoaded, setAgentsMdLoaded] = useState(false);
   const [agentsMdDirty, setAgentsMdDirty] = useState(false);
   const [agentsMdSaving, setAgentsMdSaving] = useState(false);
+  const [sttLanguage, setSttLanguage] = useState(() => {
+    try { return localStorage.getItem("stt_language") || "any"; } catch { return "any"; }
+  });
 
   // Fetch settings on mount
   useEffect(() => {
@@ -150,6 +189,11 @@ export default function SettingsGeneralTab() {
     }
   }, [agentsMdContent]);
 
+  const handleSttLanguageChange = useCallback((value: string) => {
+    setSttLanguage(value);
+    try { localStorage.setItem("stt_language", value); } catch { /* ignore */ }
+  }, []);
+
   if (loading) {
     return (
       <div className="space-y-3">
@@ -232,6 +276,37 @@ export default function SettingsGeneralTab() {
             />
             <span className="text-xs font-medium">Keep important memories</span>
           </button>
+        </div>
+      </div>
+
+      {/* Speech-to-Text Card */}
+      <div className="rounded-lg border bg-card p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <Mic className="h-4 w-4 text-muted-foreground" />
+          <span className="text-sm font-semibold">Speech-to-Text</span>
+        </div>
+
+        <p className="text-xs text-muted-foreground">
+          Language for voice transcription using local Whisper AI.
+          Auto-detect works well but specifying a language improves accuracy.
+        </p>
+
+        <div className="flex items-center gap-3">
+          <label className="text-xs font-medium text-muted-foreground shrink-0">
+            Language
+          </label>
+          <Select value={sttLanguage} onValueChange={handleSttLanguageChange}>
+            <SelectTrigger className="h-8 text-xs">
+              <SelectValue placeholder="Auto-detect" />
+            </SelectTrigger>
+            <SelectContent>
+              {WHISPER_LANGUAGES.map((lang) => (
+                <SelectItem key={lang.value} value={lang.value} className="text-xs">
+                  {lang.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
