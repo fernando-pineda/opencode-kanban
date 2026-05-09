@@ -2489,13 +2489,15 @@ const distPath = path.join(__dirname, "..", "dist", "web");
 
 // CORS headers required for SharedArrayBuffer (ONNX Runtime WASM multi-threading)
 // and AudioWorklet loading (COEP requires CORP on all subresources).
-app.use(express.static(distPath, {
-  setHeaders: (res) => {
-    res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
-    res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
-    res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
-  },
-}));
+// Applied globally so ALL responses (static files, SPA fallback, API) include them.
+app.use((_req: Request, res: Response, next: () => void) => {
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  next();
+});
+
+app.use(express.static(distPath));
 
 app.get("*", (req: Request, res: Response) => {
   res.sendFile(path.join(distPath, "index.html"));
