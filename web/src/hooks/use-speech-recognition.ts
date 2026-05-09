@@ -106,10 +106,9 @@ export function useSpeechRecognition(
     recognition.onerror = (event: any) => {
       const errorType = event.error
 
-      // Chrome fires "no-speech" when the user stays silent — just stop quietly.
+      // Chrome fires "no-speech" when the user pauses — just clear interim text.
+      // Keep listening so onend auto-restarts recognition in continuous mode.
       if (errorType === "no-speech") {
-        isListeningRef.current = false
-        setIsListening(false)
         setInterimTranscript("")
         return
       }
