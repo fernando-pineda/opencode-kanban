@@ -230,6 +230,16 @@ const __dirname = dirname(__filename);
 const PORT = parseInt(process.env.WEB_PORT || "3210", 10);
 const app = express();
 
+// ── CORS Headers (MUST be first — before all routes) ─────────
+// Required for SharedArrayBuffer (ONNX Runtime WASM multi-threading)
+// and AudioWorklet loading (COEP requires CORP on all subresources).
+app.use((_req: Request, res: Response, next: () => void) => {
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  next();
+});
+
 // ── Middleware ───────────────────────────────────────────────
 
 app.use(express.json());
@@ -2544,16 +2554,6 @@ app.get("/api/version", async (_req: Request, res: Response) => {
 // ── Static Files & SPA Fallback ────────────────────────────
 
 const distPath = path.join(__dirname, "..", "dist", "web");
-
-// CORS headers required for SharedArrayBuffer (ONNX Runtime WASM multi-threading)
-// and AudioWorklet loading (COEP requires CORP on all subresources).
-// Applied globally so ALL responses (static files, SPA fallback, API) include them.
-app.use((_req: Request, res: Response, next: () => void) => {
-  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
-  res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
-  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
-  next();
-});
 
 app.use(express.static(distPath));
 
