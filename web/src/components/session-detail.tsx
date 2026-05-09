@@ -1,6 +1,5 @@
 import {
   useEffect,
-  useLayoutEffect,
   useState,
   useRef,
   useCallback,
@@ -9,7 +8,7 @@ import {
   useMemo,
 } from "react";
 import ReactDOM from "react-dom";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { ChatMessageList, type ChatMessageListHandle } from "@/components/chat-message-list";
 import {
   X,
   ChevronDown,
@@ -129,8 +128,6 @@ interface SessionDetailProps {
 }
 
 /* ── Helpers ───────────────────────────────────────────── */
-
-const LAST_N = 20;
 
 function formatDuration(startMs: number, endMs?: number): string {
   const end = endMs || Date.now();
@@ -1966,22 +1963,17 @@ export default function SessionDetail({
     Record<string, number>
   >({});
   const panelRef = useRef<HTMLDivElement>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const chatListRef = useRef<ChatMessageListHandle>(null);
   const isDragging = useRef(false);
   const startX = useRef(0);
   const startWidth = useRef(0);
   const totalRef = useRef(0);
-  const prevMessageCountRef = useRef(0);
   const isBusyRef = useRef(false);
   const waitingForResponseRef = useRef(false);
-  const isNearBottom = useRef(true);
-  const shouldAutoScroll = useRef(false);
-  const [showScrollButton, setShowScrollButton] = useState(false);
 
   const sessionIdRef = useRef<string | null>(sessionId);
   const dataRef = useRef<SessionData | null>(null);
   const sessionCache = useRef<Map<string, SessionData>>(new Map());
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [visible, setVisible] = useState(false);
@@ -2128,9 +2120,6 @@ export default function SessionDetail({
         });
         totalRef.current = (data?.total || 0) + 1;
         waitingForResponseRef.current = true;
-        shouldAutoScroll.current = true;
-        isNearBottom.current = true;
-        setShowScrollButton(false);
       } catch (err) {
         console.error("Failed to send message:", err);
         setSending(false);
@@ -2204,12 +2193,9 @@ export default function SessionDetail({
         const countData = await countRes.json();
         totalRef.current = countData.total;
 
-        // Child sessions: show all messages (no limit). Parent: show last N.
-        const isChild = sid !== sessionIdRef.current;
-        const limit = isChild ? countData.total : LAST_N;
-        const offset = isChild ? 0 : Math.max(0, countData.total - LAST_N);
+        // Fetch all messages — react-virtuoso handles virtualization
         const msgRes = await fetch(
-          `/api/sessions/${sid}/messages?limit=${limit}&offset=${offset}`,
+          `/api/sessions/${sid}/messages?limit=${countData.total}&offset=0`,
         );
         if (!msgRes.ok) throw new Error(`Failed: ${msgRes.status}`);
         const msgData = await msgRes.json();
@@ -2228,60 +2214,6 @@ export default function SessionDetail({
     },
     [fetchStatuses],
   );
-
-  // Load older messages (pagination)
-  const loadOlderMessages = useCallback(async () => {
-    if (!data || isLoadingMore) return;
-    if (!sessionId || activeChildId) return; // Only load for parent session
-
-    const alreadyLoaded = data.messages.length;
-    if (alreadyLoaded >= data.total) return; // All messages already loaded
-
-    setIsLoadingMore(true);
-    try {
-      // Calculate offset for older messages
-      const offset = Math.max(0, data.total - alreadyLoaded - LAST_N);
-      const limit = LAST_N;
-
-      const res = await fetch(
-        `/api/sessions/${sessionId}/messages?limit=${limit}&offset=${offset}`,
-      );
-      if (!res.ok) throw new Error(`Failed: ${res.status}`);
-      const olderData = await res.json();
-
-      // Preserve scroll position
-      const scrollDelta = scrollRef.current
-        ? scrollRef.current.scrollHeight - scrollRef.current.scrollTop
-        : 0;
-
-      // Prepend older messages
-      setData((prev) => {
-        if (!prev) return olderData;
-        return {
-          ...prev,
-          messages: [...olderData.messages, ...prev.messages],
-        };
-      });
-
-      // Prevent auto-scroll from firing after prepending
-      prevMessageCountRef.current =
-        data.messages.length + olderData.messages.length;
-
-      // Restore scroll position
-      queueMicrotask(() => {
-        requestAnimationFrame(() => {
-          if (scrollRef.current) {
-            const newHeight = scrollRef.current.scrollHeight;
-            scrollRef.current.scrollTop = newHeight - scrollDelta;
-          }
-        });
-      });
-    } catch (err) {
-      console.error("Failed to load older messages:", err);
-    } finally {
-      setIsLoadingMore(false);
-    }
-  }, [data, sessionId, activeChildId, isLoadingMore]);
 
   // Fetch todos
   const fetchTodos = useCallback(async (sid: string) => {
@@ -2417,10 +2349,6 @@ export default function SessionDetail({
       totalRef.current = cached.total;
       setLoading(false);
       setError(null);
-      // Reset scroll tracking for the restored session
-      isNearBottom.current = true;
-      shouldAutoScroll.current = false;
-      hasScrolledToBottomRef.current = false;
     } else {
       // No cache for this session — clear old data and show skeleton
       setData(null);
@@ -2431,14 +2359,6 @@ export default function SessionDetail({
 
     // Delay fetches until after the 200ms slide-in animation finishes
     const timer = setTimeout(() => {
-      // Reset scroll tracking so auto-scroll-to-bottom fires for the new session
-      prevMessageCountRef.current = 0;
-      if (!cached) {
-        isNearBottom.current = true;
-        shouldAutoScroll.current = false;
-        hasScrolledToBottomRef.current = false;
-      }
-
       fetchMessages(activeSessionId);
       fetchTodos(activeSessionId);
 
@@ -2562,15 +2482,6 @@ export default function SessionDetail({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Track scroll position for isNearBottom + scroll-to-bottom button
-  const handleScroll = useCallback(() => {
-    if (!scrollRef.current) return;
-    const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
-    const nearBottom = scrollHeight - scrollTop - clientHeight < 150;
-    isNearBottom.current = nearBottom;
-    setShowScrollButton(!nearBottom && scrollHeight > clientHeight + 300);
-  }, []);
-
   // Compute isBusy at component level (not inside useEffect)
   // This ensures it's available for JSX rendering and polling interval
   const activeId = activeChildId || sessionId;
@@ -2591,9 +2502,6 @@ export default function SessionDetail({
       compacting
     : false;
 
-  // Pagination: check if we have more messages to load
-  const hasMoreMessages = data ? data.messages.length < data.total : false;
-
   // Filter out empty messages for display
   const visibleMessages = useMemo(() => {
     if (!data) return [];
@@ -2605,62 +2513,6 @@ export default function SessionDetail({
         (msg.compactions && msg.compactions.length > 0),
     );
   }, [data]);
-
-  // Setup virtualizer — use scrollToOffset on mount to start at bottom
-  const hasScrolledToBottomRef = useRef(false);
-  const virtualizer = useVirtualizer({
-    count: visibleMessages.length,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: () => 100,
-    getItemKey: (index) => visibleMessages[index]?.id ?? index,
-    measureElement:
-      typeof window !== "undefined"
-        ? (element) => element?.getBoundingClientRect().height
-        : undefined,
-    overscan: 5,
-    // Start scrolled to bottom: set offset to huge value, clamps to max scroll
-    initialOffset: visibleMessages.length > 0 ? Number.MAX_SAFE_INTEGER : 0,
-  });
-
-  // Mark that we've done the initial bottom scroll (via initialOffset)
-  // after the virtualizer has actually rendered the items.
-  useLayoutEffect(() => {
-    if (visibleMessages.length > 0 && !hasScrolledToBottomRef.current) {
-      hasScrolledToBottomRef.current = true;
-    }
-  }, [visibleMessages.length]);
-
-  // Auto-scroll to bottom during streaming and new messages
-  // Derive a streaming key that changes when the last message's text grows
-  const lastMsgTextLen =
-    data && data.messages.length > 0
-      ? (data.messages[data.messages.length - 1].text?.length ?? 0)
-      : 0;
-  const msgCount = data?.messages.length ?? 0;
-
-  useEffect(() => {
-    if (!data || !scrollRef.current) return;
-    // Skip the initial mount scroll — handled by initialOffset above
-    if (!hasScrolledToBottomRef.current) return;
-
-    // Determine if we should auto-scroll:
-    // 1. Always scroll if user explicitly sent a message (shouldAutoScroll flag)
-    // 2. Or scroll if user is near bottom (covers new messages AND streaming text updates)
-    const shouldScroll = shouldAutoScroll.current || isNearBottom.current;
-
-    if (shouldScroll) {
-      shouldAutoScroll.current = false; // Reset flag after use
-      const lastIdx = visibleMessages.length - 1;
-      if (lastIdx >= 0) {
-        requestAnimationFrame(() => {
-          virtualizer.scrollToIndex(lastIdx, {
-            align: "end",
-            behavior: "smooth",
-          });
-        });
-      }
-    }
-  }, [msgCount, lastMsgTextLen, open, visibleMessages.length, virtualizer]);
 
   // Compute context limit based on model
   const modelStr = data
@@ -2685,29 +2537,14 @@ export default function SessionDetail({
       try {
         const activeSessionId = activeChildId || sessionId;
 
-        // Fetch authoritative messages from DB
-        const countRes = await fetch(
-          `/api/sessions/${activeSessionId}/messages?limit=0&offset=0`,
+        // Fetch all messages from DB
+        const msgRes = await fetch(
+          `/api/sessions/${activeSessionId}/messages?limit=9999&offset=0`,
         );
-        if (!countRes.ok) return;
-        const countData = await countRes.json();
-        const newTotal = countData.total;
-
-        if (newTotal > totalRef.current) {
-          const prevData = dataRef.current;
-          const currentlyLoaded = prevData?.messages?.length || LAST_N;
-          const oldTotal = totalRef.current;
-          const startOffset = Math.max(0, oldTotal - currentlyLoaded);
-          totalRef.current = newTotal;
-
-          const fetchLimit = newTotal - startOffset;
-          const msgRes = await fetch(
-            `/api/sessions/${activeSessionId}/messages?limit=${fetchLimit}&offset=${startOffset}`,
-          );
-          if (msgRes.ok) {
-            const msgData = await msgRes.json();
-            setData(msgData);
-          }
+        if (msgRes.ok) {
+          const msgData = await msgRes.json();
+          totalRef.current = msgData.total;
+          setData(msgData);
         }
 
         // Refresh todos, children, statuses
@@ -3073,11 +2910,7 @@ export default function SessionDetail({
         </div>
 
         {/* Messages */}
-        <div
-          ref={scrollRef}
-          className="flex-1 flex flex-col min-h-0 overflow-y-auto overflow-x-hidden"
-          onScroll={handleScroll}
-        >
+        <div className="flex-1 flex flex-col min-h-0">
           {loading && !data ? (
             <div className="space-y-3 p-4">
               <Skeleton className="h-12 w-full" />
@@ -3087,80 +2920,29 @@ export default function SessionDetail({
           ) : error ? (
             <div className="p-4 text-sm text-destructive">Error: {error}</div>
           ) : data && data.messages.length > 0 ? (
-            <>
-              {/* Load older messages button */}
-              {hasMoreMessages && !activeChildId && (
-                <div className="text-center py-3 px-4">
-                  <button
-                    onClick={loadOlderMessages}
-                    disabled={isLoadingMore}
-                    className="text-xs px-3 py-1.5 rounded-md bg-muted/50 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {isLoadingMore
-                      ? "Loading…"
-                      : `Load older messages (${data.total - data.messages.length} more)`}
-                  </button>
-                </div>
+            <ChatMessageList
+              key={data?.session_id}
+              ref={chatListRef}
+              messages={visibleMessages}
+              renderMessage={(msg, prevMsg, nextMsg, isLast) => (
+                <MessageRow
+                  msg={msg}
+                  prevMsg={prevMsg}
+                  nextMsg={nextMsg}
+                  isLast={isLast}
+                  sessionStatuses={sessionStatuses}
+                  children={children}
+                  onViewChild={handleViewChild}
+                  sessionId={activeChildId || sessionId || ""}
+                  directory={data?.directory ?? newSessionDirectory ?? null}
+                  isBusy={isBusy}
+                  isLastAssistant={msg.role === "assistant" && isLast}
+                  onAnswerSubmitted={() => {
+                    waitingForResponseRef.current = true;
+                  }}
+                />
               )}
-
-              {/* Virtualized message list */}
-              <div
-                style={{
-                  height: `${virtualizer.getTotalSize()}px`,
-                  width: "100%",
-                  position: "relative",
-                }}
-              >
-                {virtualizer.getVirtualItems().map((virtualRow) => {
-                  const msg = visibleMessages[virtualRow.index];
-                  const msgIndex = data.messages.indexOf(msg);
-                  const prevMsg =
-                    msgIndex > 0 ? data.messages[msgIndex - 1] : undefined;
-                  const nextMsg =
-                    msgIndex < data.messages.length - 1
-                      ? data.messages[msgIndex + 1]
-                      : undefined;
-                  const isLast = msgIndex === data.messages.length - 1;
-
-                  return (
-                    <div
-                      key={msg.id || virtualRow.index}
-                      data-index={virtualRow.index}
-                      ref={virtualizer.measureElement}
-                      style={{
-                        position: "absolute",
-                        top: 0,
-                        left: 0,
-                        width: "100%",
-                        transform: `translateY(${virtualRow.start}px)`,
-                      }}
-                    >
-                      <MessageRow
-                        msg={msg}
-                        prevMsg={prevMsg}
-                        nextMsg={nextMsg}
-                        isLast={isLast}
-                        sessionStatuses={sessionStatuses}
-                        children={children}
-                        onViewChild={handleViewChild}
-                        sessionId={activeChildId || sessionId || ""}
-                        directory={
-                          data?.directory ?? newSessionDirectory ?? null
-                        }
-                        isBusy={isBusy}
-                        isLastAssistant={msg.role === "assistant" && isLast}
-                        onAnswerSubmitted={() => {
-                          // Trigger a poll to refresh messages
-                          waitingForResponseRef.current = true;
-                          shouldAutoScroll.current = true;
-                          isNearBottom.current = true;
-                        }}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-            </>
+            />
           ) : (
             <div className="flex-1 flex items-center justify-center">
               <div className="text-center">
@@ -3187,29 +2969,6 @@ export default function SessionDetail({
             </div>
           )}
         </div>
-
-        {/* Scroll to bottom button */}
-        {showScrollButton && (
-          <div className="relative">
-            <button
-              onClick={() => {
-                const lastIdx = visibleMessages.length - 1;
-                if (lastIdx >= 0) {
-                  virtualizer.scrollToIndex(lastIdx, {
-                    align: "end",
-                    behavior: "smooth",
-                  });
-                }
-                isNearBottom.current = true;
-                setShowScrollButton(false);
-              }}
-              className="absolute -top-12 right-4 z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-background/90 border shadow-md text-xs text-muted-foreground hover:text-foreground hover:bg-background transition-colors backdrop-blur-sm"
-            >
-              <ChevronDown className="w-3.5 h-3.5" />
-              Scroll to bottom
-            </button>
-          </div>
-        )}
 
         {/* Todos + Message Input */}
         <div className="border-t flex-shrink-0">
