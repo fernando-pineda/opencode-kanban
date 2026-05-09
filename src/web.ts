@@ -1243,7 +1243,7 @@ app.post(
   async (req: Request, res: Response) => {
     try {
       const boardId = parseInt(req.params.id, 10);
-      const { issue, agent } = req.body as {
+      const { issue, issues, agent } = req.body as {
         issue?: {
           title: string;
           body: string;
@@ -1251,11 +1251,27 @@ app.post(
           number: number;
           repository_url: string;
         };
+        issues?: Array<{
+          title: string;
+          body: string;
+          html_url: string;
+          number: number;
+          repository_url: string;
+        }>;
         agent?: string;
+        prompt?: string;
       };
-      if (!issue) {
+
+      // Normalize to array (backward-compatible: single issue -> wrap)
+      const allIssues = issues || (issue ? [issue] : null);
+      if (!allIssues || allIssues.length === 0) {
         return res.status(400).json({ error: "Issue data is required" });
       }
+
+      const isBatch = allIssues.length > 1;
+      const sessionTitle = isBatch
+        ? `${allIssues.length} GitHub Issues`
+        : `GH #${allIssues[0].number}: ${allIssues[0].title}`;
 
       // Get board info for directory
       const boardFull = getBoardFull(boardId);
@@ -1267,7 +1283,7 @@ app.post(
       const sessionRes = await fetch(url.toString(), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: `GH #${issue.number}: ${issue.title}` }),
+        body: JSON.stringify({ title: sessionTitle }),
       });
       if (!sessionRes.ok) {
         const body = await sessionRes.text().catch(() => "");
@@ -1277,8 +1293,21 @@ app.post(
       }
       const session = await sessionRes.json();
 
-      // Build the prompt from the issue
-      const prompt = `## GitHub Issue #${issue.number}\n\n**Title:** ${issue.title}\n**URL:** ${issue.html_url}\n\n${issue.body || "(no description)"}\n\n---\n\nPlease analyze and address this GitHub issue.`;
+      // Build the prompt from the issue(s)
+      let prompt: string;
+      if (isBatch) {
+        const sections = allIssues.map(
+          (iss, idx) =>
+            `### Issue #${iss.number}: ${iss.title}\n**URL:** ${iss.html_url}\n\n${iss.body || "(no description)"}`,
+        );
+        prompt = `## GitHub Issues (${allIssues.length} issues)\n\n${sections.join("\n\n---\n\n")}\n\n---\n\nPlease analyze and address these GitHub issues.`;
+      } else {
+        const iss = allIssues[0];
+        prompt = `## GitHub Issue #${iss.number}\n\n**Title:** ${iss.title}\n**URL:** ${iss.html_url}\n\n${iss.body || "(no description)"}\n\n---\n\nPlease analyze and address this GitHub issue.`;
+      }
+
+      // Allow frontend to override the auto-generated prompt
+      const finalPrompt = req.body.prompt || prompt;
 
       // Send the message via opencode
       const parts: object[] = [];
@@ -1289,7 +1318,7 @@ app.post(
           text: `<mandatory>\n${mandatoryContext}\n</mandatory>`,
         });
       }
-      parts.push({ type: "text", text: prompt });
+      parts.push({ type: "text", text: finalPrompt });
 
       const messageUrl = new URL(
         `${OPENCODE_SERVER}/session/${session.id}/prompt_async`,
@@ -1513,7 +1542,7 @@ app.post(
   async (req: Request, res: Response) => {
     try {
       const boardId = parseInt(req.params.id, 10);
-      const { issue, agent } = req.body as {
+      const { issue, issues, agent } = req.body as {
         issue?: {
           identifier: string;
           title: string;
@@ -1521,11 +1550,27 @@ app.post(
           url: string;
           team_key: string;
         };
+        issues?: Array<{
+          identifier: string;
+          title: string;
+          description: string;
+          url: string;
+          team_key: string;
+        }>;
         agent?: string;
+        prompt?: string;
       };
-      if (!issue) {
+
+      // Normalize to array (backward-compatible: single issue -> wrap)
+      const allIssues = issues || (issue ? [issue] : null);
+      if (!allIssues || allIssues.length === 0) {
         return res.status(400).json({ error: "Issue data is required" });
       }
+
+      const isMulti = allIssues.length > 1;
+      const sessionTitle = isMulti
+        ? `${allIssues.length} Linear Issues`
+        : `${allIssues[0].identifier}: ${allIssues[0].title}`;
 
       const boardFull = getBoardFull(boardId);
 
@@ -1535,7 +1580,7 @@ app.post(
       const sessionRes = await fetch(url.toString(), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: `${issue.identifier}: ${issue.title}` }),
+        body: JSON.stringify({ title: sessionTitle }),
       });
       if (!sessionRes.ok) {
         const body = await sessionRes.text().catch(() => "");
@@ -1545,7 +1590,20 @@ app.post(
       }
       const session = await sessionRes.json();
 
-      const prompt = `## Linear Issue ${issue.identifier}\n\n**Title:** ${issue.title}\n**URL:** ${issue.url}\n\n${issue.description || "(no description)"}\n\n---\n\nPlease analyze and address this Linear issue.`;
+      let prompt: string;
+      if (isMulti) {
+        const sections = allIssues.map(
+          (iss) =>
+            `### ${iss.identifier}: ${iss.title}\n**URL:** ${iss.url}\n\n${iss.description || "(no description)"}`,
+        );
+        prompt = `## Linear Issues (${allIssues.length} issues)\n\n${sections.join("\n\n---\n\n")}\n\n---\n\nPlease analyze and address these Linear issues.`;
+      } else {
+        const iss = allIssues[0];
+        prompt = `## Linear Issue ${iss.identifier}\n\n**Title:** ${iss.title}\n**URL:** ${iss.url}\n\n${iss.description || "(no description)"}\n\n---\n\nPlease analyze and address this Linear issue.`;
+      }
+
+      // Allow frontend to override the auto-generated prompt
+      const finalPrompt = req.body.prompt || prompt;
 
       const parts: object[] = [];
       const mandatoryContext = getMandatoryContext(session.id);
@@ -1555,7 +1613,7 @@ app.post(
           text: `<mandatory>\n${mandatoryContext}\n</mandatory>`,
         });
       }
-      parts.push({ type: "text", text: prompt });
+      parts.push({ type: "text", text: finalPrompt });
 
       const messageUrl = new URL(
         `${OPENCODE_SERVER}/session/${session.id}/prompt_async`,

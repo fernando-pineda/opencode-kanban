@@ -632,6 +632,7 @@ export interface SessionMessagesResponse {
   title: string | null;
   directory: string | null;
   model: string | null;
+  agent: string | null;
   total: number;
   context_tokens: number;
   messages: SessionMessage[];
@@ -778,6 +779,7 @@ export function getSessionMessages(
     title: sessionTitle,
     directory: sessionDirectory,
     model: sessionModel,
+    agent: getSessionLatestAgent(sessionId),
     total,
     context_tokens: contextTokens,
     messages,

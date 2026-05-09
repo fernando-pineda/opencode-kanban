@@ -100,6 +100,7 @@ interface SessionData {
   title: string | null;
   directory: string | null;
   model: string | { providerID: string; modelID: string } | null;
+  agent: string | null;
   total: number;
   context_tokens: number;
   messages: Message[];
@@ -2472,18 +2473,21 @@ export default function SessionDetail({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  // Restore agent selection when switching sessions
+  // Set agent from session data when switching sessions
   useEffect(() => {
     if (agents.length === 0) return;
+    // Prefer the session's actual agent from the API, then localStorage, then first available
+    const sessionAgent = data?.agent || null;
     const saved = getAgentForSession(sessionId || null);
-    const isValid = saved && agents.some((a) => a.name === saved);
+    const chosen = sessionAgent || saved;
+    const isValid = chosen && agents.some((a) => a.name === chosen);
     if (isValid) {
-      setSelectedAgent(saved!);
+      setSelectedAgent(chosen!);
     } else if (agents.length > 0) {
       setSelectedAgent(agents[0].name);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
+  }, [sessionId, data?.agent]);
 
   // Fetch provider model context limits (once, cached)
   useEffect(() => {

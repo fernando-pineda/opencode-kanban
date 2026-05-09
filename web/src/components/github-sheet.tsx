@@ -157,6 +157,11 @@ export default function GithubSheet({
   const [spawnAgent, setSpawnAgent] = useState("__default__");
   const [agents, setAgents] = useState<{ name: string }[]>([]);
   const [spawning, setSpawning] = useState(false);
+  const [spawnIssues, setSpawnIssues] = useState<GitHubIssue[]>([]);
+  const [spawnPrompt, setSpawnPrompt] = useState("");
+
+  // Multi-select state
+  const [selectedIssueIds, setSelectedIssueIds] = useState<Set<number>>(new Set());
 
   // Issue detail state
   const [detailIssue, setDetailIssue] = useState<GitHubIssue | null>(null);
@@ -191,6 +196,9 @@ export default function GithubSheet({
     setSpawnIssue(null);
     setSpawnAgent("");
     setSpawning(false);
+    setSelectedIssueIds(new Set());
+    setSpawnIssues([]);
+    setSpawnPrompt("");
     setDetailIssue(null);
     setActiveMainTab("issues");
     setAllProjects([]);
@@ -449,7 +457,9 @@ export default function GithubSheet({
     if (spawnDialogOpen) {
       fetch("/api/agents")
         .then((r) => r.json())
-        .then(setAgents)
+        .then((list: Array<{ name: string; mode: string }>) =>
+          setAgents(list.filter((a) => a.mode === "primary")),
+        )
         .catch(() => {});
     }
   }, [spawnDialogOpen]);
@@ -457,6 +467,43 @@ export default function GithubSheet({
   // ── Spawn agent ────────────────────────────────────────────────
 
   const handleSpawn = async () => {
+    // Multi-issue mode
+    if (spawnIssues.length > 0) {
+      setSpawning(true);
+      try {
+        const res = await fetch(`/api/boards/${boardId}/github/spawn`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            issues: spawnIssues.map(i => ({
+              title: i.title,
+              body: i.body || "",
+              html_url: i.html_url,
+              number: i.number,
+              repository_url: i.repository_url,
+            })),
+            agent: spawnAgent === "__default__" ? undefined : spawnAgent,
+            prompt: spawnPrompt,
+          }),
+        });
+        if (!res.ok) {
+          const data = await res.json();
+          throw new Error(data.error || "Failed to spawn agent");
+        }
+        setSpawnDialogOpen(false);
+        setSpawnIssues([]);
+        setSpawnPrompt("");
+        setSpawnAgent("");
+        clearSelection();
+      } catch (err) {
+        console.error("Spawn failed:", err);
+      } finally {
+        setSpawning(false);
+      }
+      return;
+    }
+
+    // Single issue mode
     if (!spawnIssue) return;
     setSpawning(true);
     try {
@@ -472,6 +519,7 @@ export default function GithubSheet({
             repository_url: spawnIssue.repository_url,
           },
           agent: spawnAgent === "__default__" ? undefined : spawnAgent,
+          prompt: spawnPrompt,
         }),
       });
       if (!res.ok) {
@@ -480,6 +528,7 @@ export default function GithubSheet({
       }
       setSpawnDialogOpen(false);
       setSpawnIssue(null);
+      setSpawnPrompt("");
       setSpawnAgent("");
     } catch (err) {
       console.error("Spawn failed:", err);
@@ -531,6 +580,20 @@ export default function GithubSheet({
         : [...prev, projectId],
     );
   };
+
+  // ── Multi-select helpers ──────────────────────────────────────
+
+  const toggleIssueSelection = (issueNumber: number, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setSelectedIssueIds(prev => {
+      const next = new Set(prev);
+      if (next.has(issueNumber)) next.delete(issueNumber);
+      else next.add(issueNumber);
+      return next;
+    });
+  };
+
+  const clearSelection = () => setSelectedIssueIds(new Set());
 
   // ── Render helpers ─────────────────────────────────────────────
 
@@ -1244,6 +1307,7 @@ export default function GithubSheet({
                     variant="default"
                     onClick={() => {
                       setSpawnIssue(detailIssue);
+                      setSpawnPrompt(`## GitHub Issue #${detailIssue.number}\n\n**Title:** ${detailIssue.title}\n**URL:** ${detailIssue.html_url}\n\n${detailIssue.body || "(no description)"}\n\n---\n\nPlease analyze and address this GitHub issue.`);
                       setSpawnDialogOpen(true);
                     }}
                     className="text-xs"
@@ -1264,6 +1328,7 @@ export default function GithubSheet({
                       setActiveRepoTab(val);
                       setIssuesAssigneeFilter("all");
                       setIssuesLabelFilter("all");
+                      clearSelection();
                     }}
                   >
                     <TabsList variant="line" className="w-full overflow-x-auto">
@@ -1398,7 +1463,25 @@ export default function GithubSheet({
 
                 {/* Table header */}
                 <div className="px-4 py-2 border-b bg-muted/30">
-                  <div className="grid grid-cols-[1fr_120px_80px_110px] gap-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  <div className="grid grid-cols-[28px_1fr_120px_80px_110px] gap-4 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                    <div className="flex items-center justify-center">
+                      <button
+                        onClick={() => {
+                          if (selectedIssueIds.size === filteredIssues.length && filteredIssues.length > 0) {
+                            clearSelection();
+                          } else {
+                            setSelectedIssueIds(new Set(filteredIssues.map(i => i.number)));
+                          }
+                        }}
+                        className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
+                          filteredIssues.length > 0 && selectedIssueIds.size === filteredIssues.length
+                            ? "bg-primary border-primary text-primary-foreground"
+                            : "border-muted-foreground/30 hover:border-muted-foreground"
+                        }`}
+                      >
+                        {filteredIssues.length > 0 && selectedIssueIds.size === filteredIssues.length && <Check className="h-3 w-3" />}
+                      </button>
+                    </div>
                     <span>Issue</span>
                     <span>Opened</span>
                     <span className="text-center">Comments</span>
@@ -1442,9 +1525,22 @@ export default function GithubSheet({
                               height: `${virtualRow.size}px`,
                               transform: `translateY(${virtualRow.start}px)`,
                             }}
-                            className="grid grid-cols-[1fr_120px_80px_110px] gap-4 items-center px-4 hover:bg-accent/50 transition-colors border-b border-border/50 cursor-pointer"
+                            className="grid grid-cols-[28px_1fr_120px_80px_110px] gap-4 items-center px-4 hover:bg-accent/50 transition-colors border-b border-border/50 cursor-pointer"
                             onClick={() => setDetailIssue(issue)}
                           >
+                            {/* Checkbox */}
+                            <div className="flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+                              <button
+                                onClick={(e) => toggleIssueSelection(issue.number, e)}
+                                className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
+                                  selectedIssueIds.has(issue.number)
+                                    ? "bg-primary border-primary text-primary-foreground"
+                                    : "border-muted-foreground/30 hover:border-muted-foreground"
+                                }`}
+                              >
+                                {selectedIssueIds.has(issue.number) && <Check className="h-3 w-3" />}
+                              </button>
+                            </div>
                             {/* Issue title + labels */}
                             <div className="min-w-0 flex items-center gap-2">
                               <span className="text-xs text-muted-foreground font-mono shrink-0">
@@ -1504,6 +1600,7 @@ export default function GithubSheet({
                                 className="h-7 px-2 text-xs"
                                 onClick={() => {
                                   setSpawnIssue(issue);
+                                  setSpawnPrompt(`## GitHub Issue #${issue.number}\n\n**Title:** ${issue.title}\n**URL:** ${issue.html_url}\n\n${issue.body || "(no description)"}\n\n---\n\nPlease analyze and address this GitHub issue.`);
                                   setSpawnDialogOpen(true);
                                 }}
                               >
@@ -1517,6 +1614,33 @@ export default function GithubSheet({
                     </div>
                   )}
                 </div>
+                {selectedIssueIds.size > 0 && (
+                  <div className="border-t px-4 py-2 bg-background flex items-center gap-3 shrink-0">
+                    <span className="text-xs text-muted-foreground">
+                      {selectedIssueIds.size} issue{selectedIssueIds.size !== 1 ? 's' : ''} selected
+                    </span>
+                    <div className="flex-1" />
+                    <Button variant="ghost" size="sm" onClick={clearSelection} className="text-xs h-7">
+                      Clear
+                    </Button>
+                    <Button
+                      variant="default"
+                      size="sm"
+                      className="text-xs h-7"
+                      onClick={() => {
+                        const selected = filteredIssues.filter(i => selectedIssueIds.has(i.number));
+                        setSpawnIssues(selected);
+                        setSpawnIssue(null);
+                        const generated = `## GitHub Issues (${selected.length} issues)\n\n${selected.map(iss => `### Issue #${iss.number}: ${iss.title}\n**URL:** ${iss.html_url}\n\n${iss.body || "(no description)"}`).join("\n\n---\n\n")}\n\n---\n\nPlease analyze and address these GitHub issues.`;
+                        setSpawnPrompt(generated);
+                        setSpawnDialogOpen(true);
+                      }}
+                    >
+                      <Rocket className="h-3 w-3 mr-1" />
+                      Spawn Agent ({selectedIssueIds.size})
+                    </Button>
+                  </div>
+                )}
               </div>
             ) : activeMainTab === "projects" &&
               config?.has_token &&
@@ -1686,6 +1810,7 @@ export default function GithubSheet({
                               ? `https://api.github.com/repos/${detailProjectItem.repository}`
                               : "",
                           });
+                          setSpawnPrompt(`## GitHub Issue #${detailProjectItem.number || 0}\n\n**Title:** ${detailProjectItem.title}\n**URL:** ${detailProjectItem.html_url || ""}\n\n${detailProjectItem.body || "(no description)"}\n\n---\n\nPlease analyze and address this GitHub issue.`);
                           setSpawnDialogOpen(true);
                         }}
                         className="text-xs"
@@ -1946,19 +2071,86 @@ export default function GithubSheet({
       </Sheet>
 
       {/* ── Spawn Dialog ─────────────────────────────────────── */}
-      <Dialog open={spawnDialogOpen} onOpenChange={setSpawnDialogOpen}>
-        <DialogContent className="max-w-lg">
+      <Dialog open={spawnDialogOpen} onOpenChange={(open) => {
+        setSpawnDialogOpen(open);
+        if (!open) { setSpawnIssues([]); setSpawnIssue(null); setSpawnPrompt(""); }
+      }}>
+        <DialogContent className="sm:max-w-5xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Rocket className="h-4 w-4" />
               Spawn Agent from Issue
             </DialogTitle>
             <DialogDescription>
-              Create a new session to work on this GitHub issue.
+              {spawnIssues.length > 0
+                ? `Create a new session to work on ${spawnIssues.length} selected issues.`
+                : "Create a new session to work on this GitHub issue."}
             </DialogDescription>
           </DialogHeader>
 
-          {spawnIssue && (
+          {spawnIssues.length > 0 ? (
+            <div className="space-y-4">
+              {/* Issue list */}
+              <div className="rounded-lg border bg-muted/30">
+                <div className="px-3 pt-3 pb-1 text-xs font-medium text-muted-foreground">
+                  {spawnIssues.length} issues combined into one session
+                </div>
+                <div className="max-h-[200px] overflow-y-auto px-3 pb-3 space-y-1">
+                  {spawnIssues.map((iss) => (
+                    <div key={iss.number} className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground font-mono shrink-0">
+                        #{iss.number}
+                      </span>
+                      <span className="text-sm truncate">{iss.title}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <Separator />
+
+              {/* Prompt */}
+              <div className="space-y-1.5">
+                <h4 className="text-xs font-medium text-muted-foreground">
+                  Prompt
+                </h4>
+                <textarea
+                  className="w-full rounded border bg-muted/30 p-3 text-xs text-foreground resize-y min-h-[120px] max-h-[300px] focus:outline-none focus:ring-1 focus:ring-primary"
+                  value={spawnPrompt}
+                  onChange={(e) => setSpawnPrompt(e.target.value)}
+                />
+              </div>
+
+              <Separator />
+
+              {/* Agent Selector */}
+              <div className="space-y-1.5">
+                <h4 className="text-xs font-medium text-muted-foreground">Agent</h4>
+                <Select value={spawnAgent} onValueChange={setSpawnAgent}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Default agent" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__default__">Default agent</SelectItem>
+                    {agents.map((a) => (
+                      <SelectItem key={a.name} value={a.name}>{a.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Actions */}
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setSpawnDialogOpen(false)} disabled={spawning}>
+                  Cancel
+                </Button>
+                <Button onClick={handleSpawn} disabled={spawning}>
+                  {spawning ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Rocket className="h-4 w-4 mr-2" />}
+                  Spawn Agent
+                </Button>
+              </div>
+            </div>
+          ) : spawnIssue ? (
             <div className="space-y-4">
               {/* Issue Preview */}
               <div className="rounded-lg border p-3 space-y-2 bg-muted/30">
@@ -1989,14 +2181,16 @@ export default function GithubSheet({
 
               <Separator />
 
-              {/* Message Preview */}
+              {/* Prompt */}
               <div className="space-y-1.5">
                 <h4 className="text-xs font-medium text-muted-foreground">
-                  Message Preview
+                  Prompt
                 </h4>
-                <div className="rounded border bg-muted/30 p-3 text-xs whitespace-pre-wrap text-muted-foreground max-h-32 overflow-y-auto">
-                  {`## GitHub Issue #${spawnIssue.number}\n\n**Title:** ${spawnIssue.title}\n**URL:** ${spawnIssue.html_url}\n\n${spawnIssue.body || "(no description)"}\n\n---\n\nPlease analyze and address this GitHub issue.`}
-                </div>
+                <textarea
+                  className="w-full rounded border bg-muted/30 p-3 text-xs text-foreground resize-y min-h-[120px] max-h-[300px] focus:outline-none focus:ring-1 focus:ring-primary"
+                  value={spawnPrompt}
+                  onChange={(e) => setSpawnPrompt(e.target.value)}
+                />
               </div>
 
               <Separator />
@@ -2040,7 +2234,7 @@ export default function GithubSheet({
                 </Button>
               </div>
             </div>
-          )}
+          ) : null}
         </DialogContent>
       </Dialog>
     </>

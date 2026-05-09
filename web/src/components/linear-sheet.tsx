@@ -142,15 +142,36 @@ export default function LinearSheet({
   const [priorityFilter, setPriorityFilter] = useState<string>("all");
   const [assigneeFilter, setAssigneeFilter] = useState<string>("all");
 
+  // Multi-select state
+  const [selectedIssueIds, setSelectedIssueIds] = useState<Set<string>>(
+    new Set(),
+  );
+
   // Spawn dialog state
   const [spawnDialogOpen, setSpawnDialogOpen] = useState(false);
   const [spawnIssue, setSpawnIssue] = useState<LinearIssue | null>(null);
+  const [spawnIssues, setSpawnIssues] = useState<LinearIssue[]>([]);
   const [spawnAgent, setSpawnAgent] = useState("__default__");
+  const [spawnPrompt, setSpawnPrompt] = useState("");
   const [agents, setAgents] = useState<{ name: string }[]>([]);
   const [spawning, setSpawning] = useState(false);
 
   // Issue detail state
   const [detailIssue, setDetailIssue] = useState<LinearIssue | null>(null);
+
+  // ── Selection helpers ────────────────────────────────────────────
+
+  const toggleIssueSelection = (issueId: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setSelectedIssueIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(issueId)) next.delete(issueId);
+      else next.add(issueId);
+      return next;
+    });
+  };
+
+  const clearSelection = () => setSelectedIssueIds(new Set());
 
   // ── Reset on board change ────────────────────────────────────────
   useEffect(() => {
@@ -173,9 +194,12 @@ export default function LinearSheet({
     setAssigneeFilter("all");
     setSpawnDialogOpen(false);
     setSpawnIssue(null);
+    setSpawnIssues([]);
     setSpawnAgent("");
+    setSpawnPrompt("");
     setSpawning(false);
     setDetailIssue(null);
+    setSelectedIssueIds(new Set());
   }, [boardId]);
 
   // ── Fetch config ───────────────────────────────────────────────
@@ -326,7 +350,9 @@ export default function LinearSheet({
     if (spawnDialogOpen) {
       fetch("/api/agents")
         .then((r) => r.json())
-        .then(setAgents)
+        .then((list: Array<{ name: string; mode: string }>) =>
+          setAgents(list.filter((a) => a.mode === "primary")),
+        )
         .catch(() => {});
     }
   }, [spawnDialogOpen]);
@@ -334,6 +360,42 @@ export default function LinearSheet({
   // ── Spawn agent ────────────────────────────────────────────────
 
   const handleSpawn = async () => {
+    // Multi-issue mode
+    if (spawnIssues.length > 0) {
+      setSpawning(true);
+      try {
+        const res = await fetch(`/api/boards/${boardId}/linear/spawn`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            issues: spawnIssues.map((i) => ({
+              identifier: i.identifier,
+              title: i.title,
+              description: i.description || "",
+              url: i.url,
+              team_key: i.team.key,
+            })),
+            prompt: spawnPrompt,
+            agent: spawnAgent === "__default__" ? undefined : spawnAgent,
+          }),
+        });
+        if (!res.ok) {
+          const data = await res.json();
+          throw new Error(data.error || "Failed to spawn agent");
+        }
+        setSpawnDialogOpen(false);
+        setSpawnIssues([]);
+        setSpawnAgent("");
+        clearSelection();
+      } catch (err) {
+        console.error("Spawn failed:", err);
+      } finally {
+        setSpawning(false);
+      }
+      return;
+    }
+
+    // Single issue mode (existing logic unchanged)
     if (!spawnIssue) return;
     setSpawning(true);
     try {
@@ -348,6 +410,7 @@ export default function LinearSheet({
             url: spawnIssue.url,
             team_key: spawnIssue.team.key,
           },
+          prompt: spawnPrompt,
           agent: spawnAgent === "__default__" ? undefined : spawnAgent,
         }),
       });
@@ -845,6 +908,7 @@ export default function LinearSheet({
                     variant="default"
                     onClick={() => {
                       setSpawnIssue(detailIssue);
+                      setSpawnPrompt(`## Linear Issue ${detailIssue.identifier}\n\n**Title:** ${detailIssue.title}\n**URL:** ${detailIssue.url}\n\n${detailIssue.description || "(no description)"}\n\n---\n\nPlease analyze and address this Linear issue.`);
                       setSpawnDialogOpen(true);
                     }}
                     className="text-xs"
@@ -865,6 +929,7 @@ export default function LinearSheet({
                       setActiveTeamTab(val);
                       setPriorityFilter("all");
                       setAssigneeFilter("all");
+                      clearSelection();
                     }}
                   >
                     <TabsList variant="line" className="w-full overflow-x-auto">
@@ -998,7 +1063,34 @@ export default function LinearSheet({
 
                 {/* Table header */}
                 <div className="px-4 py-2 border-b bg-muted/30">
-                  <div className="grid grid-cols-[1fr_100px_90px_90px_80px] gap-3 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                  <div className="grid grid-cols-[28px_1fr_100px_90px_90px_80px] gap-3 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                    <div className="flex items-center justify-center">
+                      <button
+                        onClick={() => {
+                          if (
+                            selectedIssueIds.size === filteredIssues.length &&
+                            filteredIssues.length > 0
+                          ) {
+                            clearSelection();
+                          } else {
+                            setSelectedIssueIds(
+                              new Set(filteredIssues.map((i) => i.id)),
+                            );
+                          }
+                        }}
+                        className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
+                          filteredIssues.length > 0 &&
+                          selectedIssueIds.size === filteredIssues.length
+                            ? "bg-primary border-primary text-primary-foreground"
+                            : "border-muted-foreground/30 hover:border-muted-foreground"
+                        }`}
+                      >
+                        {filteredIssues.length > 0 &&
+                          selectedIssueIds.size === filteredIssues.length && (
+                            <Check className="h-3 w-3" />
+                          )}
+                      </button>
+                    </div>
                     <span>Issue</span>
                     <span>State</span>
                     <span>Priority</span>
@@ -1043,9 +1135,29 @@ export default function LinearSheet({
                               height: `${virtualRow.size}px`,
                               transform: `translateY(${virtualRow.start}px)`,
                             }}
-                            className="grid grid-cols-[1fr_100px_90px_90px_80px] gap-3 items-center px-4 hover:bg-accent/50 transition-colors border-b border-border/50 cursor-pointer"
+                            className="grid grid-cols-[28px_1fr_100px_90px_90px_80px] gap-3 items-center px-4 hover:bg-accent/50 transition-colors border-b border-border/50 cursor-pointer"
                             onClick={() => setDetailIssue(issue)}
                           >
+                            {/* Checkbox */}
+                            <div
+                              className="flex items-center justify-center"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <button
+                                onClick={(e) =>
+                                  toggleIssueSelection(issue.id, e)
+                                }
+                                className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
+                                  selectedIssueIds.has(issue.id)
+                                    ? "bg-primary border-primary text-primary-foreground"
+                                    : "border-muted-foreground/30 hover:border-muted-foreground"
+                                }`}
+                              >
+                                {selectedIssueIds.has(issue.id) && (
+                                  <Check className="h-3 w-3" />
+                                )}
+                              </button>
+                            </div>
                             {/* Issue title + labels */}
                             <div className="min-w-0 flex items-center gap-2">
                               <span className="text-xs text-muted-foreground font-mono shrink-0">
@@ -1123,6 +1235,8 @@ export default function LinearSheet({
                                 className="h-7 px-2 text-xs"
                                 onClick={() => {
                                   setSpawnIssue(issue);
+                                  setSpawnIssues([]);
+                                  setSpawnPrompt(`## Linear Issue ${issue.identifier}\n\n**Title:** ${issue.title}\n**URL:** ${issue.url}\n\n${issue.description || "(no description)"}\n\n---\n\nPlease analyze and address this Linear issue.`);
                                   setSpawnDialogOpen(true);
                                 }}
                               >
@@ -1136,6 +1250,41 @@ export default function LinearSheet({
                     </div>
                   )}
                 </div>
+                {selectedIssueIds.size > 0 && (
+                  <div className="border-t px-4 py-2 bg-background flex items-center gap-3 shrink-0">
+                    <span className="text-xs text-muted-foreground">
+                      {selectedIssueIds.size} issue
+                      {selectedIssueIds.size !== 1 ? "s" : ""} selected
+                    </span>
+                    <div className="flex-1" />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={clearSelection}
+                      className="text-xs h-7"
+                    >
+                      Clear
+                    </Button>
+                    <Button
+                      variant="default"
+                      size="sm"
+                      className="text-xs h-7"
+                      onClick={() => {
+                        const selected = filteredIssues.filter((i) =>
+                          selectedIssueIds.has(i.id),
+                        );
+                        const generated = `## Linear Issues (${selected.length} issues)\n\n${selected.map((iss) => `### ${iss.identifier}: ${iss.title}\n**URL:** ${iss.url}\n\n${iss.description || "(no description)"}`).join("\n\n---\n\n")}\n\n---\n\nPlease analyze and address these Linear issues.`;
+                        setSpawnPrompt(generated);
+                        setSpawnIssues(selected);
+                        setSpawnIssue(null);
+                        setSpawnDialogOpen(true);
+                      }}
+                    >
+                      <Rocket className="h-3 w-3 mr-1" />
+                      Spawn Agent ({selectedIssueIds.size})
+                    </Button>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1143,8 +1292,18 @@ export default function LinearSheet({
       </Sheet>
 
       {/* ── Spawn Dialog ─────────────────────────────────────── */}
-      <Dialog open={spawnDialogOpen} onOpenChange={setSpawnDialogOpen}>
-        <DialogContent className="max-w-lg">
+      <Dialog
+        open={spawnDialogOpen}
+        onOpenChange={(open) => {
+          setSpawnDialogOpen(open);
+          if (!open) {
+            setSpawnIssues([]);
+            setSpawnIssue(null);
+            setSpawnPrompt("");
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-5xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Rocket className="h-4 w-4" />
@@ -1155,7 +1314,81 @@ export default function LinearSheet({
             </DialogDescription>
           </DialogHeader>
 
-          {spawnIssue && (
+          {spawnIssues.length > 0 ? (
+            <div className="space-y-4">
+              {/* Issue list */}
+              <div className="rounded-lg border bg-muted/30">
+                <div className="px-3 pt-3 pb-1 text-xs font-medium text-muted-foreground">
+                  {spawnIssues.length} issues combined into one session
+                </div>
+                <div className="max-h-[200px] overflow-y-auto px-3 pb-3 space-y-1">
+                  {spawnIssues.map((iss) => (
+                    <div key={iss.id} className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground font-mono shrink-0">
+                        {iss.identifier}
+                      </span>
+                      <span className="text-sm truncate">{iss.title}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <Separator />
+
+              {/* Prompt */}
+              <div className="space-y-1.5">
+                <h4 className="text-xs font-medium text-muted-foreground">
+                  Prompt
+                </h4>
+                <textarea
+                  className="w-full rounded border bg-muted/30 p-3 text-xs text-foreground resize-y min-h-[120px] max-h-[300px] focus:outline-none focus:ring-1 focus:ring-primary"
+                  value={spawnPrompt}
+                  onChange={(e) => setSpawnPrompt(e.target.value)}
+                />
+              </div>
+
+              <Separator />
+
+              {/* Agent Selector */}
+              <div className="space-y-1.5">
+                <h4 className="text-xs font-medium text-muted-foreground">
+                  Agent
+                </h4>
+                <Select value={spawnAgent} onValueChange={setSpawnAgent}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Default agent" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__default__">Default agent</SelectItem>
+                    {agents.map((a) => (
+                      <SelectItem key={a.name} value={a.name}>
+                        {a.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Actions */}
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => setSpawnDialogOpen(false)}
+                  disabled={spawning}
+                >
+                  Cancel
+                </Button>
+                <Button onClick={handleSpawn} disabled={spawning}>
+                  {spawning ? (
+                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                  ) : (
+                    <Rocket className="h-4 w-4 mr-2" />
+                  )}
+                  Spawn Agent
+                </Button>
+              </div>
+            </div>
+          ) : spawnIssue ? (
             <div className="space-y-4">
               {/* Issue Preview */}
               <div className="rounded-lg border p-3 space-y-2 bg-muted/30">
@@ -1206,14 +1439,16 @@ export default function LinearSheet({
 
               <Separator />
 
-              {/* Message Preview */}
+              {/* Prompt */}
               <div className="space-y-1.5">
                 <h4 className="text-xs font-medium text-muted-foreground">
-                  Message Preview
+                  Prompt
                 </h4>
-                <div className="rounded border bg-muted/30 p-3 text-xs whitespace-pre-wrap text-muted-foreground max-h-32 overflow-y-auto">
-                  {`## Linear Issue ${spawnIssue.identifier}\n\n**Title:** ${spawnIssue.title}\n**URL:** ${spawnIssue.url}\n\n${spawnIssue.description || "(no description)"}\n\n---\n\nPlease analyze and address this Linear issue.`}
-                </div>
+                <textarea
+                  className="w-full rounded border bg-muted/30 p-3 text-xs text-foreground resize-y min-h-[120px] max-h-[300px] focus:outline-none focus:ring-1 focus:ring-primary"
+                  value={spawnPrompt}
+                  onChange={(e) => setSpawnPrompt(e.target.value)}
+                />
               </div>
 
               <Separator />
@@ -1257,7 +1492,7 @@ export default function LinearSheet({
                 </Button>
               </div>
             </div>
-          )}
+          ) : null}
         </DialogContent>
       </Dialog>
     </>
