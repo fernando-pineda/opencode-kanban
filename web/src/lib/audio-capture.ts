@@ -31,12 +31,10 @@ export class AudioCapture {
     // Use the native sample rate so we can later resample precisely to 16 kHz.
     this.audioContext = new AudioContext();
 
-    // Load the worklet processor module.
-    const workletUrl = new URL(
-      './audio-processor.worklet.ts',
-      import.meta.url,
-    );
-    await this.audioContext.audioWorklet.addModule(workletUrl.toString());
+    // Load the worklet processor module from the public directory.
+    // The file lives in web/public/ so it's served at the root path in both
+    // dev and production, avoiding COEP/CORS issues with Vite chunk loading.
+    await this.audioContext.audioWorklet.addModule('/audio-processor.worklet.js');
 
     // Create the worklet node and wire up the message port.
     this.workletNode = new AudioWorkletNode(
