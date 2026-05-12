@@ -17,6 +17,7 @@ import KanbanColumn from "./kanban-column";
 import MemoriesSheet from "./memories-sheet";
 import GithubSheet from "./github-sheet";
 import LinearSheet from "./linear-sheet";
+import JiraSheet from "./jira-sheet";
 import {
   Tooltip,
   TooltipContent,
@@ -42,6 +43,7 @@ export default function KanbanBoard({
   const [memoriesOpen, setMemoriesOpen] = useState(false);
   const [githubOpen, setGithubOpen] = useState(false);
   const [linearOpen, setLinearOpen] = useState(false);
+const [jiraOpen, setJiraOpen] = useState(false);
   const [activeCard, setActiveCard] = useState<Card | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -171,6 +173,12 @@ export default function KanbanBoard({
                 customIcon: true,
               },
               {
+                icon: null,
+                label: "JIRA",
+                onClick: () => setJiraOpen(true),
+                customIcon: true,
+              },
+              {
                 icon: PlusCircle,
                 label: "New Session",
                 onClick: onNewSession || (() => {}),
@@ -182,7 +190,22 @@ export default function KanbanBoard({
                     onClick={onClick}
                     className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
                   >
-                    {customIcon ? (
+                    {customIcon && label === "JIRA" ? (
+                      <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none">
+                        <rect
+                          x="2"
+                          y="2"
+                          width="20"
+                          height="20"
+                          rx="4"
+                          fill="#0052CC"
+                        />
+                        <path
+                          d="M11.65 5.01c-.5.06-.93.37-1.14.81l-3.5 7.27a.75.75 0 0 0 .67 1.08h3.32v4.33a.5.5 0 0 0 .93.25l3.5-7.27a.75.75 0 0 0-.67-1.08H11.5V5.26a.5.5 0 0 0-.35-.48.49.49 0 0 0-.5.23z"
+                          fill="white"
+                        />
+                      </svg>
+                    ) : customIcon ? (
                       <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none">
                         <rect
                           x="2"
@@ -266,6 +289,11 @@ export default function KanbanBoard({
         boardId={boardId}
         open={linearOpen}
         onOpenChange={setLinearOpen}
+      />
+      <JiraSheet
+        boardId={boardId}
+        open={jiraOpen}
+        onOpenChange={setJiraOpen}
       />
     </div>
   );

@@ -373,3 +373,72 @@ export interface LinearIssue {
   parent: { id: string; identifier: string; title: string } | null;
   project: { id: string; name: string } | null;
 }
+
+// ── JIRA integration types ────────────────────────────────────
+
+export interface JiraConfig {
+  board_id: number;
+  has_token: boolean;
+  token_masked: string;
+  base_url: string;
+  email: string;
+  selected_projects: string[]; // project keys e.g. ["PROJ", "ENG"]
+  created_at: string;
+  updated_at: string;
+}
+
+export interface JiraProject {
+  key: string;           // e.g. "PROJ"
+  name: string;
+  projectTypeKey: string; // "software", "business", "service_desk"
+  style: string;         // "classic" or "next-gen"
+  avatarUrls: Record<string, string>; // "16x16", "24x24", "32x32", "48x48"
+}
+
+export interface JiraStatus {
+  name: string;
+  statusCategory: {
+    key: string;     // "new", "indeterminate", "done", "todo"
+    colorName: string; // "blue-gray", "yellow", "green", "medium-gray"
+    name: string;    // "To Do", "In Progress", "Done"
+  };
+}
+
+export interface JiraPriority {
+  id: string;
+  name: string;    // "Highest", "High", "Medium", "Low", "Lowest"
+  iconUrl: string;
+}
+
+export interface JiraIssueType {
+  id: string;
+  name: string;    // "Bug", "Story", "Task", "Epic", "Sub-task"
+  iconUrl: string;
+  subtask: boolean;
+}
+
+export interface JiraUser {
+  accountId: string;
+  displayName: string;
+  emailAddress?: string;
+  avatarUrls: Record<string, string>;
+}
+
+export interface JiraIssue {
+  key: string;              // e.g. "PROJ-123"
+  fields: {
+    summary: string;
+    description: unknown | null;  // ADF JSON — use adfToPlainText()
+    status: JiraStatus;
+    priority: JiraPriority | null;
+    issuetype: JiraIssueType;
+    assignee: JiraUser | null;
+    reporter: JiraUser | null;
+    labels: string[];
+    project: { key: string; name: string };
+    created: string;
+    updated: string;
+  };
+  // Computed (not from API):
+  html_url?: string;  // constructed as `${base_url}/browse/${key}`
+}

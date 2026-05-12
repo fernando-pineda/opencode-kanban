@@ -133,3 +133,15 @@ CREATE TABLE IF NOT EXISTS kanban_linear_configs (
   updated_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_linear_configs_board ON kanban_linear_configs(board_id);
+
+-- JIRA integration — per-board JIRA Cloud config and selected projects
+CREATE TABLE IF NOT EXISTS kanban_jira_configs (
+  board_id INTEGER PRIMARY KEY REFERENCES kanban_boards(id) ON DELETE CASCADE,
+  jira_base_url TEXT NOT NULL,
+  jira_email TEXT NOT NULL,
+  jira_api_token TEXT NOT NULL,
+  selected_projects TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_jira_configs_board ON kanban_jira_configs(board_id);

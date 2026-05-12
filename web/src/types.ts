@@ -223,3 +223,71 @@ export interface LinearIssue {
   created_at: string;
   updated_at: string;
 }
+
+// ── JIRA integration types ────────────────────────────────────
+
+export interface JiraConfig {
+  board_id: number;
+  has_token: boolean;
+  token_masked: string;
+  base_url: string;
+  email: string;
+  selected_projects: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface JiraProject {
+  key: string;
+  name: string;
+  projectTypeKey: string;
+  style: string;
+  avatarUrls: Record<string, string>;
+}
+
+export interface JiraStatus {
+  name: string;
+  statusCategory: {
+    key: string;
+    colorName: string;
+    name: string;
+  };
+}
+
+export interface JiraPriority {
+  id: string;
+  name: string;
+  iconUrl: string;
+}
+
+export interface JiraIssueType {
+  id: string;
+  name: string;
+  iconUrl: string;
+  subtask: boolean;
+}
+
+export interface JiraUser {
+  accountId: string;
+  displayName: string;
+  emailAddress?: string;
+  avatarUrls: Record<string, string>;
+}
+
+export interface JiraIssue {
+  key: string;
+  html_url: string;
+  fields: {
+    summary: string;
+    description: string | null; // already converted to plain text by backend
+    status: JiraStatus;
+    priority: JiraPriority | null;
+    issuetype: JiraIssueType;
+    assignee: JiraUser | null;
+    reporter: JiraUser | null;
+    labels: string[];
+    project: { key: string; name: string };
+    created: string;
+    updated: string;
+  };
+}

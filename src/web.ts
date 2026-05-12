@@ -190,6 +190,10 @@ import {
   saveLinearConfig,
   updateLinearSelectedTeams,
   deleteLinearConfig,
+  getJiraConfig,
+  saveJiraConfig,
+  updateJiraSelectedProjects,
+  deleteJiraConfig,
 } from "./db.js";
 import {
   validateGitHubToken,
@@ -206,6 +210,13 @@ import {
   listLinearIssues,
   getLinearIssue,
 } from "./linear.js";
+import {
+  validateJiraToken,
+  listJiraProjects,
+  searchJiraIssues,
+  getJiraIssue,
+  adfToPlainText,
+} from "./jira.js";
 import {
   searchMemories,
   getMemories,
@@ -1613,6 +1624,288 @@ app.post(
       }
 
       // Allow frontend to override the auto-generated prompt
+      const finalPrompt = req.body.prompt || prompt;
+
+      const parts: object[] = [];
+      const mandatoryContext = getMandatoryContext(session.id);
+      if (mandatoryContext.trim()) {
+        parts.push({
+          type: "text",
+          text: `<mandatory>\n${mandatoryContext}\n</mandatory>`,
+        });
+      }
+      parts.push({ type: "text", text: finalPrompt });
+
+      const messageUrl = new URL(
+        `${OPENCODE_SERVER}/session/${session.id}/prompt_async`,
+      );
+      const sessionDir =
+        getSessionDirectory(session.id) || boardFull.board.repo_path;
+      if (sessionDir) messageUrl.searchParams.set("directory", sessionDir);
+      await fetch(messageUrl.toString(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ parts, ...(agent ? { agent } : {}) }),
+      });
+
+      emitBoardChange("card_created", {
+        session_id: session.id,
+        board_id: boardId,
+      });
+      res.json({ session_id: session.id, title: session.title });
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
+    }
+  },
+);
+
+// ── JIRA integration ──────────────────────────────────────────
+
+// GET JIRA config (credentials masked)
+app.get("/api/boards/:id/jira/config", (req: Request, res: Response) => {
+  try {
+    const boardId = parseInt(req.params.id, 10);
+    const config = getJiraConfig(boardId);
+    if (!config) {
+      return res.json({
+        board_id: boardId,
+        has_token: false,
+        token_masked: "",
+        base_url: "",
+        email: "",
+        selected_projects: [],
+        created_at: "",
+        updated_at: "",
+      });
+    }
+    const token = config.jira_api_token;
+    const masked =
+      token.length > 8 ? token.slice(0, 4) + "****" + token.slice(-4) : "****";
+    res.json({
+      board_id: config.board_id,
+      has_token: true,
+      token_masked: masked,
+      base_url: config.jira_base_url,
+      email: config.jira_email,
+      selected_projects: JSON.parse(config.selected_projects || "[]"),
+      created_at: config.created_at,
+      updated_at: config.updated_at,
+    });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// PUT save JIRA credentials + validate
+app.put(
+  "/api/boards/:id/jira/config",
+  async (req: Request, res: Response) => {
+    try {
+      const boardId = parseInt(req.params.id, 10);
+      const { base_url, email, token } = req.body as {
+        base_url?: string;
+        email?: string;
+        token?: string;
+      };
+      if (!base_url?.trim() || !email?.trim() || !token?.trim()) {
+        return res
+          .status(400)
+          .json({ error: "Base URL, email, and API token are required" });
+      }
+      const validation = await validateJiraToken(
+        base_url.trim(),
+        email.trim(),
+        token.trim(),
+      );
+      if (!validation.valid) {
+        return res.status(400).json({ error: "Invalid JIRA credentials" });
+      }
+      saveJiraConfig(boardId, base_url.trim(), email.trim(), token.trim());
+      res.json({ success: true, user: validation.user });
+    } catch (error) {
+      res.status(400).json({ error: (error as Error).message });
+    }
+  },
+);
+
+// DELETE remove JIRA config
+app.delete("/api/boards/:id/jira/config", (req: Request, res: Response) => {
+  try {
+    const boardId = parseInt(req.params.id, 10);
+    deleteJiraConfig(boardId);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// GET accessible JIRA projects (from stored credentials)
+app.get(
+  "/api/boards/:id/jira/projects",
+  async (req: Request, res: Response) => {
+    try {
+      const boardId = parseInt(req.params.id, 10);
+      const config = getJiraConfig(boardId);
+      if (!config) {
+        return res
+          .status(404)
+          .json({ error: "JIRA not configured for this board" });
+      }
+      const projects = await listJiraProjects(
+        config.jira_base_url,
+        config.jira_email,
+        config.jira_api_token,
+      );
+      const selectedProjects: string[] = JSON.parse(
+        config.selected_projects || "[]",
+      );
+      res.json({ projects, selected_projects: selectedProjects });
+    } catch (error) {
+      res.status(500).json({ error: (error as Error).message });
+    }
+  },
+);
+
+// PUT update selected JIRA projects
+app.put("/api/boards/:id/jira/projects", (req: Request, res: Response) => {
+  try {
+    const boardId = parseInt(req.params.id, 10);
+    const { selected_projects } = req.body as { selected_projects?: string[] };
+    if (!Array.isArray(selected_projects)) {
+      return res
+        .status(400)
+        .json({ error: "selected_projects must be an array" });
+    }
+    updateJiraSelectedProjects(boardId, selected_projects);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// GET search JIRA issues with JQL
+app.get(
+  "/api/boards/:id/jira/issues",
+  async (req: Request, res: Response) => {
+    try {
+      const boardId = parseInt(req.params.id, 10);
+      const config = getJiraConfig(boardId);
+      if (!config) {
+        return res
+          .status(404)
+          .json({ error: "JIRA not configured for this board" });
+      }
+
+      const selectedProjects: string[] = JSON.parse(
+        config.selected_projects || "[]",
+      );
+      if (selectedProjects.length === 0) {
+        return res.json({ issues: [], projects: [] });
+      }
+
+      const projectFilter = req.query.project as string | undefined;
+      const jqlQuery = req.query.jql as string | undefined;
+      const statusCategory = req.query.statusCategory as string | undefined;
+
+      const projectKeys = projectFilter
+        ? selectedProjects.filter((p) => p === projectFilter)
+        : selectedProjects;
+
+      const result = await searchJiraIssues(
+        config.jira_base_url,
+        config.jira_email,
+        config.jira_api_token,
+        {
+          projectKeys,
+          jql: jqlQuery,
+          statusCategory,
+        },
+      );
+
+      // Convert ADF descriptions to plain text for frontend
+      const issues = result.issues.map((issue) => ({
+        ...issue,
+        fields: {
+          ...issue.fields,
+          description: issue.fields.description
+            ? adfToPlainText(issue.fields.description)
+            : null,
+        },
+      }));
+
+      res.json({ issues, projects: selectedProjects });
+    } catch (error) {
+      console.error("[jira] Failed to fetch issues:", error);
+      res.status(500).json({ error: (error as Error).message });
+    }
+  },
+);
+
+// POST spawn agent from JIRA issue(s)
+app.post(
+  "/api/boards/:id/jira/spawn",
+  async (req: Request, res: Response) => {
+    try {
+      const boardId = parseInt(req.params.id, 10);
+      const { issue, issues, agent } = req.body as {
+        issue?: {
+          key: string;
+          title: string;
+          description: string;
+          url: string;
+        };
+        issues?: Array<{
+          key: string;
+          title: string;
+          description: string;
+          url: string;
+        }>;
+        agent?: string;
+        prompt?: string;
+      };
+
+      // Normalize to array
+      const allIssues = issues || (issue ? [issue] : null);
+      if (!allIssues || allIssues.length === 0) {
+        return res.status(400).json({ error: "Issue data is required" });
+      }
+
+      const isMulti = allIssues.length > 1;
+      const sessionTitle = isMulti
+        ? `${allIssues.length} JIRA Issues`
+        : `JIRA ${allIssues[0].key}: ${allIssues[0].title}`;
+
+      const boardFull = getBoardFull(boardId);
+
+      const url = new URL(`${OPENCODE_SERVER}/session`);
+      if (boardFull.board.repo_path)
+        url.searchParams.set("directory", boardFull.board.repo_path);
+
+      const sessionRes = await fetch(url.toString(), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: sessionTitle }),
+      });
+      if (!sessionRes.ok) {
+        const body = await sessionRes.text().catch(() => "");
+        return res
+          .status(sessionRes.status)
+          .json({ error: body || `opencode error ${sessionRes.status}` });
+      }
+      const session = await sessionRes.json();
+
+      let prompt: string;
+      if (isMulti) {
+        const sections = allIssues.map(
+          (iss) =>
+            `### ${iss.key}: ${iss.title}\n**URL:** ${iss.url}\n\n${iss.description || "(no description)"}`,
+        );
+        prompt = `## JIRA Issues (${allIssues.length} issues)\n\n${sections.join("\n\n---\n\n")}\n\n---\n\nPlease analyze and address these JIRA issues.`;
+      } else {
+        const iss = allIssues[0];
+        prompt = `## JIRA Issue ${iss.key}\n\n**Title:** ${iss.title}\n**URL:** ${iss.url}\n\n${iss.description || "(no description)"}\n\n---\n\nPlease analyze and address this JIRA issue.`;
+      }
+
       const finalPrompt = req.body.prompt || prompt;
 
       const parts: object[] = [];

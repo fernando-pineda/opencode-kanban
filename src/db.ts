@@ -143,11 +143,40 @@ function migrateAddGitHubConfigs(): void {
   }
 }
 
+function migrateAddJiraConfigs(): void {
+  try {
+    const tableInfo = db
+      .prepare("PRAGMA table_info(kanban_jira_configs)")
+      .all() as Array<{ name: string }>;
+    if (tableInfo.length === 0) {
+      console.error("[kanban-db] Creating kanban_jira_configs table...");
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS kanban_jira_configs (
+          board_id INTEGER PRIMARY KEY REFERENCES kanban_boards(id) ON DELETE CASCADE,
+          jira_base_url TEXT NOT NULL,
+          jira_email TEXT NOT NULL,
+          jira_api_token TEXT NOT NULL,
+          selected_projects TEXT NOT NULL DEFAULT '[]',
+          created_at TEXT DEFAULT (datetime('now')),
+          updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_jira_configs_board ON kanban_jira_configs(board_id);
+      `);
+      console.error(
+        "[kanban-db] Migration complete: kanban_jira_configs table created.",
+      );
+    }
+  } catch (err) {
+    console.error("[kanban-db] Migration error (non-fatal):", err);
+  }
+}
+
 try {
   db = initDb();
   migrateAddReadyStatus();
   migrateAddBoardPosition();
   migrateAddGitHubConfigs();
+  migrateAddJiraConfigs();
   console.error(`[kanban-db] Connected to opencode.db: ${OPENCODE_DB_PATH}`);
 } catch (err) {
   console.error(`[kanban-db] Failed to initialize:`, err);
@@ -737,10 +766,9 @@ export function getSessionMessages(
     }
 
     // Strip <mandatory>...</mandatory> blocks to prevent them from flashing in chat UI
-    textContent = textContent.replace(
-      /<mandatory>[\s\S]*?<\/mandatory>\s*/g,
-      "",
-    ).trim();
+    textContent = textContent
+      .replace(/<mandatory>[\s\S]*?<\/mandatory>\s*/g, "")
+      .trim();
 
     messages.push({
       id: messageRow.id,
@@ -1373,10 +1401,7 @@ export function getLinearConfig(boardId: number): LinearConfigRow | undefined {
     .get(boardId) as LinearConfigRow | undefined;
 }
 
-export function saveLinearConfig(
-  boardId: number,
-  apiKey: string,
-): void {
+export function saveLinearConfig(boardId: number, apiKey: string): void {
   const teamsJson = JSON.stringify([]);
   db.prepare(
     `
@@ -1407,4 +1432,60 @@ export function deleteLinearConfig(boardId: number): void {
   db.prepare("DELETE FROM kanban_linear_configs WHERE board_id = ?").run(
     boardId,
   );
+}
+
+// ── JIRA config helpers ──────────────────────────────────────
+
+export interface JiraConfigRow {
+  board_id: number;
+  jira_base_url: string;
+  jira_email: string;
+  jira_api_token: string;
+  selected_projects: string; // JSON array string of project keys
+  created_at: string;
+  updated_at: string;
+}
+
+export function getJiraConfig(boardId: number): JiraConfigRow | undefined {
+  return db
+    .prepare("SELECT * FROM kanban_jira_configs WHERE board_id = ?")
+    .get(boardId) as JiraConfigRow | undefined;
+}
+
+export function saveJiraConfig(
+  boardId: number,
+  baseUrl: string,
+  email: string,
+  apiToken: string,
+): void {
+  const projectsJson = JSON.stringify([]);
+  db.prepare(
+    `
+    INSERT INTO kanban_jira_configs (board_id, jira_base_url, jira_email, jira_api_token, selected_projects)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(board_id) DO UPDATE SET
+      jira_base_url = excluded.jira_base_url,
+      jira_email = excluded.jira_email,
+      jira_api_token = excluded.jira_api_token,
+      updated_at = datetime('now')
+  `,
+  ).run(boardId, baseUrl.replace(/\/+$/, ""), email, apiToken, projectsJson);
+}
+
+export function updateJiraSelectedProjects(
+  boardId: number,
+  selectedProjects: string[],
+): void {
+  const projectsJson = JSON.stringify(selectedProjects);
+  db.prepare(
+    `
+    UPDATE kanban_jira_configs
+    SET selected_projects = ?, updated_at = datetime('now')
+    WHERE board_id = ?
+  `,
+  ).run(projectsJson, boardId);
+}
+
+export function deleteJiraConfig(boardId: number): void {
+  db.prepare("DELETE FROM kanban_jira_configs WHERE board_id = ?").run(boardId);
 }

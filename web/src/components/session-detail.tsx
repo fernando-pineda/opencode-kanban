@@ -2562,7 +2562,7 @@ export default function SessionDetail({
     : "";
   const contextLimit = modelContextLimits[modelStr] || 0;
 
-  // SSE-driven real-time streaming — no polling
+  // SSE real-time streaming (best-effort — may not fire in all opencode versions)
   useEffect(() => {
     if (!open || !sessionId) return;
 
@@ -2787,6 +2787,65 @@ export default function SessionDetail({
 
     return () => {
       es.close();
+    };
+  }, [open, sessionId, activeChildId]);
+
+  // Polling fallback — primary update mechanism when SSE events are absent
+  useEffect(() => {
+    if (!open || !sessionId) return;
+
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    const poll = async () => {
+      try {
+        const activeSessionId = activeChildId || sessionId;
+        const msgRes = await fetch(
+          `/api/sessions/${activeSessionId}/messages?limit=9999&offset=0`,
+        );
+        if (msgRes.ok) {
+          const msgData = await msgRes.json();
+          setData((prev) => {
+            // Only update if something changed (total or last message text / tool calls)
+            if (!prev) return msgData;
+            if (prev.total !== msgData.total) return msgData;
+            const prevLast = prev.messages[prev.messages.length - 1];
+            const newLast = msgData.messages[msgData.messages.length - 1];
+            if (!prevLast || !newLast) return msgData;
+            if (
+              prevLast.text !== newLast.text ||
+              prevLast.tool_calls?.length !== newLast.tool_calls?.length
+            )
+              return msgData;
+            return prev;
+          });
+          totalRef.current = msgData.total;
+
+          // Refresh session statuses on each poll
+          const dir = sessionDirRef.current;
+          const statusRes = await fetch(
+            `/api/opencode/session/status` +
+              (dir ? `?directory=${encodeURIComponent(dir)}` : ""),
+          );
+          if (statusRes.ok) {
+            const statusData = await statusRes.json();
+            setSessionStatuses(statusData);
+          }
+        }
+      } catch {
+        // ignore — next poll will retry
+      }
+
+      // Schedule next poll: fast when busy, slow when idle
+      const interval =
+        isBusyRef.current || waitingForResponseRef.current ? 1500 : 5000;
+      timeoutId = setTimeout(poll, interval);
+    };
+
+    // Initial poll after short delay
+    timeoutId = setTimeout(poll, 500);
+
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
     };
   }, [open, sessionId, activeChildId]);
 
