@@ -8,7 +8,10 @@ import {
   useMemo,
 } from "react";
 import ReactDOM from "react-dom";
-import { ChatMessageList, type ChatMessageListHandle } from "@/components/chat-message-list";
+import {
+  ChatMessageList,
+  type ChatMessageListHandle,
+} from "@/components/chat-message-list";
 import {
   X,
   ChevronDown,
@@ -37,6 +40,7 @@ import {
   MessageCircle,
   Mic,
   MicOff,
+  Database,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -61,6 +65,7 @@ import { Popover as PopoverPrimitive } from "radix-ui";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { useSpeechRecognition } from "@/hooks/use-speech-recognition";
+import { useFileIndexing } from "@/hooks/use-file-indexing";
 
 const Popover = PopoverPrimitive.Root;
 const PopoverTrigger = PopoverPrimitive.Trigger;
@@ -1785,15 +1790,17 @@ const ChatInput = memo(function ChatInput({
                       isListening
                         ? "text-red-500 hover:text-red-600"
                         : isModelLoading || isProcessing
-                        ? "text-yellow-500 hover:text-yellow-600"
-                        : "text-muted-foreground hover:text-foreground",
+                          ? "text-yellow-500 hover:text-yellow-600"
+                          : "text-muted-foreground hover:text-foreground",
                     )}
                   >
                     {isModelLoading ? (
                       <>
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
                         <span className="text-[10px]">
-                          {modelLoadProgress > 0 ? `${Math.round(modelLoadProgress)}%` : "Loading..."}
+                          {modelLoadProgress > 0
+                            ? `${Math.round(modelLoadProgress)}%`
+                            : "Loading..."}
                         </span>
                       </>
                     ) : isListening ? (
@@ -1806,9 +1813,7 @@ const ChatInput = memo(function ChatInput({
                     ) : isProcessing ? (
                       <>
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        <span className="text-[10px]">
-                          Transcribing...
-                        </span>
+                        <span className="text-[10px]">Transcribing...</span>
                       </>
                     ) : (
                       <>
@@ -1821,7 +1826,13 @@ const ChatInput = memo(function ChatInput({
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="top" sideOffset={6} className="text-xs">
-                  {isModelLoading ? "Loading speech model..." : isListening ? "Stop dictation" : isProcessing ? "Transcribing..." : "Start voice dictation"}
+                  {isModelLoading
+                    ? "Loading speech model..."
+                    : isListening
+                      ? "Stop dictation"
+                      : isProcessing
+                        ? "Transcribing..."
+                        : "Start voice dictation"}
                 </TooltipContent>
               </Tooltip>
             )}
@@ -2014,6 +2025,8 @@ export default function SessionDetail({
   const [visible, setVisible] = useState(false);
   const [compacting, setCompacting] = useState(false);
 
+  const { status: indexingStatus } = useFileIndexing(boardId ?? null);
+
   // Sync mounted/visible states with open — animate in/out
   useEffect(() => {
     if (open) {
@@ -2143,6 +2156,7 @@ export default function SessionDetail({
               title: null,
               directory: "",
               model: "",
+              agent: null,
               total: 1,
               context_tokens: 0,
               messages: [optimisticMsg],
@@ -2932,6 +2946,12 @@ export default function SessionDetail({
                     : data?.title || "Untitled Session";
                 })()}
               </h2>
+              {indexingStatus && indexingStatus.total_files > 0 && (
+                <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground bg-muted rounded-full px-1.5 py-0.5">
+                  <Database className="h-2.5 w-2.5" />
+                  {indexingStatus.total_files} files
+                </span>
+              )}
             </div>
             {(activeChildId || sessionId) && (
               <Tooltip>

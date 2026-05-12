@@ -25,7 +25,20 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
-import { Brain, Github, PlusCircle, Search } from "lucide-react";
+import {
+  Brain,
+  Database,
+  Github,
+  Loader2,
+  PlusCircle,
+  Search,
+} from "lucide-react";
+import { useFileIndexing } from "@/hooks/use-file-indexing";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 
 interface KanbanBoardProps {
   board: BoardFull;
@@ -43,7 +56,14 @@ export default function KanbanBoard({
   const [memoriesOpen, setMemoriesOpen] = useState(false);
   const [githubOpen, setGithubOpen] = useState(false);
   const [linearOpen, setLinearOpen] = useState(false);
-const [jiraOpen, setJiraOpen] = useState(false);
+  const [jiraOpen, setJiraOpen] = useState(false);
+  const {
+    status: indexingStatus,
+    progress: indexingProgress,
+    startIndexing,
+    stopIndexing,
+    loading: indexingLoading,
+  } = useFileIndexing(boardId);
   const [activeCard, setActiveCard] = useState<Card | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -155,6 +175,107 @@ const [jiraOpen, setJiraOpen] = useState(false);
                 className="h-7 w-44 text-xs border-0 shadow-none focus-visible:ring-0 bg-accent/50"
               />
             </div>
+            <Popover>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <PopoverTrigger asChild>
+                    <button
+                      className={`p-1.5 rounded-md transition-colors relative ${
+                        indexingStatus?.status === "indexing"
+                          ? "text-blue-500 hover:text-blue-600 bg-blue-500/10"
+                          : indexingStatus?.status === "watching"
+                            ? "text-green-500 hover:text-green-600 bg-green-500/10"
+                            : indexingStatus?.status === "error"
+                              ? "text-destructive hover:text-destructive bg-destructive/10"
+                              : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                      }`}
+                    >
+                      {indexingStatus?.status === "indexing" ? (
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                      ) : (
+                        <Database className="h-5 w-5" />
+                      )}
+                      {indexingStatus && indexingStatus.total_files > 0 && (
+                        <span className="absolute -top-1 -right-1 text-[9px] font-mono bg-muted rounded-full px-1 leading-none">
+                          {indexingStatus.total_files}
+                        </span>
+                      )}
+                    </button>
+                  </PopoverTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="text-xs">
+                  File Indexing
+                </TooltipContent>
+              </Tooltip>
+              <PopoverContent className="w-72 p-3" align="end">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-semibold">File Indexing</span>
+                    <span className="text-xs text-muted-foreground capitalize">
+                      {indexingStatus?.status || "idle"}
+                    </span>
+                  </div>
+
+                  {indexingProgress && (
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-xs text-muted-foreground">
+                        <span>Indexing: {indexingProgress.current_file}</span>
+                        <span>
+                          {indexingProgress.indexed}/{indexingProgress.total}
+                        </span>
+                      </div>
+                      <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-primary rounded-full transition-all"
+                          style={{
+                            width: `${indexingProgress.total > 0 ? (indexingProgress.indexed / indexingProgress.total) * 100 : 0}%`,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {indexingStatus && (
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <span className="text-muted-foreground">Files:</span>{" "}
+                        {indexingStatus.total_files}
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground">Chunks:</span>{" "}
+                        {indexingStatus.total_chunks}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex gap-2">
+                    {(!indexingStatus ||
+                      indexingStatus.status === "idle" ||
+                      indexingStatus.status === "error") && (
+                      <button
+                        onClick={startIndexing}
+                        disabled={indexingLoading}
+                        className="flex-1 inline-flex items-center justify-center gap-1 rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent transition-colors disabled:opacity-50"
+                      >
+                        {indexingLoading && (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        )}
+                        Start Indexing
+                      </button>
+                    )}
+                    {(indexingStatus?.status === "watching" ||
+                      indexingStatus?.status === "indexing") && (
+                      <button
+                        onClick={stopIndexing}
+                        className="flex-1 inline-flex items-center justify-center rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent transition-colors"
+                      >
+                        Stop
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
             {[
               {
                 icon: Brain,
@@ -290,11 +411,7 @@ const [jiraOpen, setJiraOpen] = useState(false);
         open={linearOpen}
         onOpenChange={setLinearOpen}
       />
-      <JiraSheet
-        boardId={boardId}
-        open={jiraOpen}
-        onOpenChange={setJiraOpen}
-      />
+      <JiraSheet boardId={boardId} open={jiraOpen} onOpenChange={setJiraOpen} />
     </div>
   );
 }

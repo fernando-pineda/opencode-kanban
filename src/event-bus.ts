@@ -15,6 +15,8 @@ export const EVENT_TYPES = {
   OPENCODE_MESSAGE_UPDATED: "opencode_message_updated",
   OPENCODE_MESSAGE_PART_DELTA: "opencode_message_part_delta",
   EPIC_UPDATED: "epic_updated",
+  FILE_INDEXING_PROGRESS: "file_indexing_progress",
+  FILE_INDEXING_STATUS: "file_indexing_status",
 } as const;
 
 export type KanbanEvents = (typeof EVENT_TYPES)[keyof typeof EVENT_TYPES];
@@ -38,6 +40,20 @@ export interface KanbanEventPayloads {
     delta: string;
   };
   epic_updated: { epic_id: number; board_id: number; status: string };
+  file_indexing_progress: {
+    board_id: number;
+    indexed: number;
+    total: number;
+    current_file: string;
+    status: 'indexing' | 'watching' | 'idle' | 'error';
+  };
+  file_indexing_status: {
+    board_id: number;
+    status: 'idle' | 'indexing' | 'watching' | 'error';
+    status_message: string;
+    total_files: number;
+    total_chunks: number;
+  };
 }
 
 // ── Typed event bus ─────────────────────────────────────────

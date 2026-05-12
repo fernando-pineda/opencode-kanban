@@ -6,7 +6,10 @@ logs/
 build/
 dist/
 web/dist/
+web/web/
 .DS_Store
 scripts/start-web.sh
 *.plist
 web/public/models/
+plan_*.html
+kanban-file-index.db

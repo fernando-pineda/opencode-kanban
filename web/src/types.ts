@@ -291,3 +291,39 @@ export interface JiraIssue {
     updated: string;
   };
 }
+
+// ── File Indexing types ──────────────────────────────────────
+
+export interface FileIndexingStatus {
+  board_id: number;
+  status: 'idle' | 'indexing' | 'watching' | 'error';
+  status_message: string;
+  total_files: number;
+  total_chunks: number;
+  total_bytes: number;
+  last_full_index: string | null;
+  ollama_model: string;
+  is_watching: boolean;
+}
+
+export interface FileSearchResult {
+  file_path: string;
+  line_start: number;
+  line_end: number;
+  content: string;
+  score: number;
+}
+
+export interface OllamaCheckResult {
+  ok: boolean;
+  models: string[];
+  error?: string;
+}
+
+export interface FileIndexingProgress {
+  board_id: number;
+  indexed: number;
+  total: number;
+  current_file: string;
+  status: 'indexing' | 'watching' | 'idle' | 'error';
+}

@@ -68,7 +68,7 @@ function getSessionDirectory(sessionId: string): string | null {
 /**
  * Build the combined mandatory context: rules + memories + knowledge for the session's repo.
  */
-function getMandatoryContext(sessionId: string): string {
+async function getMandatoryContext(sessionId: string): Promise<string> {
   const parts: string[] = [];
 
   // 1. Rules (existing)
@@ -105,6 +105,22 @@ function getMandatoryContext(sessionId: string): string {
       }
     } catch {
       /* no memories table for this repo yet */
+    }
+
+    // 4. File context (indexed code snippets relevant to the conversation)
+    try {
+      const board = getDb()
+        .prepare("SELECT id FROM kanban_boards WHERE repo_path = ? AND status = 'active'")
+        .get(repoPath) as { id: number } | undefined;
+
+      if (board) {
+        const fileContext = await fileIndexer.getFileContext(board.id, parts.join(' ').slice(0, 500), 4000);
+        if (fileContext) {
+          parts.push(fileContext);
+        }
+      }
+    } catch {
+      /* file indexing not available or disabled */
     }
   }
 
@@ -194,6 +210,7 @@ import {
   saveJiraConfig,
   updateJiraSelectedProjects,
   deleteJiraConfig,
+  upsertFileIndexMeta,
 } from "./db.js";
 import {
   validateGitHubToken,
@@ -232,6 +249,7 @@ import {
   deleteKnowledge,
 } from "./memories.js";
 import type { KnowledgeCategory, MemoryType } from "./types.js";
+import { fileIndexer } from "./indexer.js";
 
 // ── Setup ────────────────────────────────────────────────────
 
@@ -774,7 +792,7 @@ app.post(
 
       // Build parts array — inject mandatory rules + memories + knowledge
       const parts: object[] = [];
-      const mandatoryContext = getMandatoryContext(sessionId);
+      const mandatoryContext = await getMandatoryContext(sessionId);
       if (mandatoryContext.trim()) {
         parts.push({
           type: "text",
@@ -1332,7 +1350,7 @@ app.post(
 
       // Send the message via opencode
       const parts: object[] = [];
-      const mandatoryContext = getMandatoryContext(session.id);
+      const mandatoryContext = await getMandatoryContext(session.id);
       if (mandatoryContext.trim()) {
         parts.push({
           type: "text",
@@ -1627,7 +1645,7 @@ app.post(
       const finalPrompt = req.body.prompt || prompt;
 
       const parts: object[] = [];
-      const mandatoryContext = getMandatoryContext(session.id);
+      const mandatoryContext = await getMandatoryContext(session.id);
       if (mandatoryContext.trim()) {
         parts.push({
           type: "text",
@@ -1909,7 +1927,7 @@ app.post(
       const finalPrompt = req.body.prompt || prompt;
 
       const parts: object[] = [];
-      const mandatoryContext = getMandatoryContext(session.id);
+      const mandatoryContext = await getMandatoryContext(session.id);
       if (mandatoryContext.trim()) {
         parts.push({
           type: "text",
@@ -2483,6 +2501,168 @@ app.put("/api/settings", (req: Request, res: Response) => {
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
+  }
+});
+
+// ── File Indexing routes ──────────────────────────────────────
+
+// Get indexing status for a board
+app.get("/api/boards/:id/indexing/status", async (req: Request, res: Response) => {
+  try {
+    const boardId = parseInt(req.params.id, 10);
+    const meta = fileIndexer.getFileIndexMeta(boardId);
+    const counts = fileIndexer.countFileChunks(boardId);
+    const isWatching = fileIndexer.isWatching(boardId);
+    
+    const awsProfile = getSetting('file_indexing_aws_profile');
+    const embeddingModel = getSetting('file_indexing_embedding_model');
+
+    res.json({
+      board_id: boardId,
+      status: meta?.status || 'idle',
+      status_message: meta?.status_message || '',
+      total_files: counts.files,
+      total_chunks: counts.chunks,
+      total_bytes: meta?.total_bytes || 0,
+      last_full_index: meta?.last_full_index || null,
+      aws_profile: awsProfile || '',
+      embedding_model: embeddingModel || '',
+      is_watching: isWatching,
+    });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// Start full re-index for a board
+app.post("/api/boards/:id/indexing/start", async (req: Request, res: Response) => {
+  try {
+    const boardId = parseInt(req.params.id, 10);
+    const board = getDb()
+      .prepare("SELECT * FROM kanban_boards WHERE id = ? AND status = 'active'")
+      .get(boardId) as { id: number; repo_path: string } | undefined;
+    
+    if (!board) {
+      res.status(404).json({ error: "Board not found" });
+      return;
+    }
+    
+    const enabled = getDb()
+      .prepare("SELECT value FROM kanban_settings WHERE key = ?")
+      .get("file_indexing_enabled") as { value: string } | undefined;
+    
+    if (enabled?.value !== 'true') {
+      res.status(400).json({ error: "File indexing is disabled" });
+      return;
+    }
+    
+    // Reset Bedrock client to pick up any changed settings
+    fileIndexer.resetBedrockClient();
+
+    // Set status to indexing BEFORE responding so the frontend sees it immediately
+    upsertFileIndexMeta(boardId, { status: 'indexing', status_message: 'Starting full index...' });
+
+    // Start indexing in background
+    const indexPromise = fileIndexer.indexAllFiles(boardId, board.repo_path, (indexed, total, currentFile) => {
+      emitBoardChange(EVENT_TYPES.FILE_INDEXING_PROGRESS, {
+        board_id: boardId,
+        indexed,
+        total,
+        current_file: currentFile,
+        status: 'indexing',
+      });
+    });
+    
+    // Don't await — respond immediately
+    res.json({ ok: true, message: "Indexing started" });
+    
+    // Await in background and emit completion event
+    indexPromise
+      .then((result) => {
+        const counts = fileIndexer.countFileChunks(boardId);
+        emitBoardChange(EVENT_TYPES.FILE_INDEXING_STATUS, {
+          board_id: boardId,
+          status: 'idle',
+          status_message: result.errors.length > 0 ? `${result.errors.length} errors` : 'Indexing complete',
+          total_files: counts.files,
+          total_chunks: counts.chunks,
+        });
+        
+        // Auto-start watching after full index
+        fileIndexer.startWatching(boardId, board.repo_path);
+        const watchCounts = fileIndexer.countFileChunks(boardId);
+        emitBoardChange(EVENT_TYPES.FILE_INDEXING_STATUS, {
+          board_id: boardId,
+          status: 'watching',
+          status_message: 'Watching for file changes',
+          total_files: watchCounts.files,
+          total_chunks: watchCounts.chunks,
+        });
+      })
+      .catch((err) => {
+        emitBoardChange(EVENT_TYPES.FILE_INDEXING_STATUS, {
+          board_id: boardId,
+          status: 'error',
+          status_message: (err as Error).message,
+          total_files: 0,
+          total_chunks: 0,
+        });
+      });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// Stop indexing and watching for a board
+app.post("/api/boards/:id/indexing/stop", async (req: Request, res: Response) => {
+  try {
+    const boardId = parseInt(req.params.id, 10);
+    fileIndexer.stopWatching(boardId);
+    
+    upsertFileIndexMeta(boardId, { status: 'idle', status_message: 'Stopped by user' });
+    
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// Search indexed files
+app.post("/api/boards/:id/indexing/search", async (req: Request, res: Response) => {
+  try {
+    const boardId = parseInt(req.params.id, 10);
+    const { query, top_k } = req.body;
+    
+    if (!query || typeof query !== 'string') {
+      res.status(400).json({ error: "query is required" });
+      return;
+    }
+    
+    const results = await fileIndexer.searchFiles(boardId, query, top_k || 5);
+    res.json({ results });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// List available AWS profiles from ~/.aws/credentials and ~/.aws/config
+app.get("/api/indexing/aws-profiles", async (req: Request, res: Response) => {
+  try {
+    const profiles = fileIndexer.listAwsProfiles();
+    res.json({ profiles });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// Test AWS Bedrock connection with given profile/region/model
+app.post("/api/indexing/test-connection", async (req: Request, res: Response) => {
+  try {
+    const { profile, region, model } = req.body || {};
+    const result = await fileIndexer.testAwsConnection(profile, region, model);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
   }
 });
 

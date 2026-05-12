@@ -145,3 +145,46 @@ CREATE TABLE IF NOT EXISTS kanban_jira_configs (
   updated_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_jira_configs_board ON kanban_jira_configs(board_id);
+
+-- File indexing — embedded source code chunks with vector search
+CREATE TABLE IF NOT EXISTS kanban_file_index (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  board_id INTEGER NOT NULL REFERENCES kanban_boards(id) ON DELETE CASCADE,
+  file_path TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  line_start INTEGER NOT NULL,
+  line_end INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(board_id, file_path, line_start)
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_index_board ON kanban_file_index(board_id);
+CREATE INDEX IF NOT EXISTS idx_file_index_path ON kanban_file_index(board_id, file_path);
+CREATE INDEX IF NOT EXISTS idx_file_index_hash ON kanban_file_index(board_id, file_path, content_hash);
+
+-- File indexing metadata per board
+CREATE TABLE IF NOT EXISTS kanban_file_index_meta (
+  board_id INTEGER PRIMARY KEY REFERENCES kanban_boards(id) ON DELETE CASCADE,
+  total_files INTEGER NOT NULL DEFAULT 0,
+  total_chunks INTEGER NOT NULL DEFAULT 0,
+  total_bytes INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'idle'
+    CHECK(status IN ('idle', 'indexing', 'watching', 'error')),
+  status_message TEXT DEFAULT '',
+  last_full_index TEXT DEFAULT NULL,
+  ollama_model TEXT NOT NULL DEFAULT 'nomic-embed-text',
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Settings keys for file indexing (stored in kanban_settings table, NOT a new table):
+-- file_indexing_enabled = 'true'
+-- file_indexing_aws_profile = 'default'
+-- file_indexing_aws_region = 'us-east-1'
+-- file_indexing_embedding_model = 'amazon.titan-embed-text-v2:0'
+-- file_indexing_embedding_dimensions = '1024'
+-- file_indexing_max_file_size = '1048576'
+-- file_indexing_chunk_size = '2000'
+-- file_indexing_chunk_overlap = '200'
+-- file_indexing_top_k = '5'

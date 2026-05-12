@@ -177,6 +177,7 @@ try {
   migrateAddBoardPosition();
   migrateAddGitHubConfigs();
   migrateAddJiraConfigs();
+  migrateFileIndexingSettings();
   console.error(`[kanban-db] Connected to opencode.db: ${OPENCODE_DB_PATH}`);
 } catch (err) {
   console.error(`[kanban-db] Failed to initialize:`, err);
@@ -1488,4 +1489,169 @@ export function updateJiraSelectedProjects(
 
 export function deleteJiraConfig(boardId: number): void {
   db.prepare("DELETE FROM kanban_jira_configs WHERE board_id = ?").run(boardId);
+}
+
+// ── File indexing helpers ──────────────────────────────────────
+
+export interface FileIndexMeta {
+  board_id: number;
+  total_files: number;
+  total_chunks: number;
+  total_bytes: number;
+  status: "idle" | "indexing" | "watching" | "error";
+  status_message: string;
+  last_full_index: string | null;
+  ollama_model: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export function getFileIndexMeta(boardId: number): FileIndexMeta | undefined {
+  return db
+    .prepare("SELECT * FROM kanban_file_index_meta WHERE board_id = ?")
+    .get(boardId) as FileIndexMeta | undefined;
+}
+
+export function upsertFileIndexMeta(
+  boardId: number,
+  updates: Partial<Omit<FileIndexMeta, "board_id" | "created_at">>,
+): void {
+  const existing = getFileIndexMeta(boardId);
+  if (!existing) {
+    db.prepare(
+      `
+      INSERT INTO kanban_file_index_meta (board_id, total_files, total_chunks, total_bytes, status, status_message, last_full_index, ollama_model)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+    ).run(
+      boardId,
+      updates.total_files ?? 0,
+      updates.total_chunks ?? 0,
+      updates.total_bytes ?? 0,
+      updates.status ?? "idle",
+      updates.status_message ?? "",
+      updates.last_full_index ?? null,
+      updates.ollama_model ?? "nomic-embed-text",
+    );
+  } else {
+    const sets: string[] = [];
+    const values: any[] = [];
+    for (const [key, value] of Object.entries(updates)) {
+      if (key === "board_id" || key === "created_at") continue;
+      sets.push(`${key} = ?`);
+      values.push(value);
+    }
+    if (sets.length === 0) return;
+    sets.push("updated_at = datetime('now')");
+    db.prepare(
+      `UPDATE kanban_file_index_meta SET ${sets.join(", ")} WHERE board_id = ?`,
+    ).run(...values, boardId);
+  }
+}
+
+export function deleteFileIndexMeta(boardId: number): void {
+  db.prepare("DELETE FROM kanban_file_index_meta WHERE board_id = ?").run(
+    boardId,
+  );
+}
+
+export function getFileChunks(
+  boardId: number,
+  filePath: string,
+): Array<{
+  id: number;
+  file_path: string;
+  line_start: number;
+  line_end: number;
+  content: string;
+  content_hash: string;
+}> {
+  return db
+    .prepare(
+      "SELECT id, file_path, line_start, line_end, content, content_hash FROM kanban_file_index WHERE board_id = ? AND file_path = ? ORDER BY line_start",
+    )
+    .all(boardId, filePath) as Array<{
+    id: number;
+    file_path: string;
+    line_start: number;
+    line_end: number;
+    content: string;
+    content_hash: string;
+  }>;
+}
+
+export function deleteFileChunks(boardId: number, filePath: string): void {
+  db.prepare(
+    "DELETE FROM kanban_file_index WHERE board_id = ? AND file_path = ?",
+  ).run(boardId, filePath);
+}
+
+export function insertFileChunk(
+  boardId: number,
+  filePath: string,
+  contentHash: string,
+  lineStart: number,
+  lineEnd: number,
+  content: string,
+): number {
+  const result = db
+    .prepare(
+      `
+    INSERT INTO kanban_file_index (board_id, file_path, content_hash, line_start, line_end, content)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(board_id, file_path, line_start) DO UPDATE SET
+      content_hash = excluded.content_hash,
+      line_end = excluded.line_end,
+      content = excluded.content,
+      updated_at = datetime('now')
+  `,
+    )
+    .run(boardId, filePath, contentHash, lineStart, lineEnd, content);
+  return result.lastInsertRowid as number;
+}
+
+export function countFileChunks(boardId: number): {
+  files: number;
+  chunks: number;
+} {
+  const row = db
+    .prepare(
+      `
+    SELECT COUNT(DISTINCT file_path) as files, COUNT(*) as chunks
+    FROM kanban_file_index WHERE board_id = ?
+  `,
+    )
+    .get(boardId) as { files: number; chunks: number };
+  return row;
+}
+
+export function deleteAllFileChunks(boardId: number): void {
+  db.prepare("DELETE FROM kanban_file_index WHERE board_id = ?").run(boardId);
+}
+
+function migrateFileIndexingSettings(): void {
+  try {
+    const defaults: Record<string, string> = {
+      file_indexing_enabled: "true",
+      file_indexing_aws_profile: "default",
+      file_indexing_aws_region: "us-east-1",
+      file_indexing_embedding_model: "amazon.titan-embed-text-v2:0",
+      file_indexing_embedding_dimensions: "1024",
+      file_indexing_max_file_size: "1048576",
+      file_indexing_chunk_size: "2000",
+      file_indexing_chunk_overlap: "200",
+      file_indexing_top_k: "5",
+    };
+    const insert = db.prepare(`
+      INSERT OR IGNORE INTO kanban_settings (key, value) VALUES (?, ?)
+    `);
+    for (const [key, value] of Object.entries(defaults)) {
+      insert.run(key, value);
+    }
+  } catch (err) {
+    console.error(
+      "[kanban-db] File indexing settings migration error (non-fatal):",
+      err,
+    );
+  }
 }
